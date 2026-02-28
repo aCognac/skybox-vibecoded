@@ -17,9 +17,9 @@ const MANIFEST_URL = `${BASE_URL}/jmp?dz_id=${DZ.id}`;
 
 // ── schedule constants ────────────────────────────────────────────────────────
 
-const ACTIVE_MS  = 2.5 * 60_000;  // 2.5 min — daytime
-const NIGHT_MS   = 30  * 60_000;  // 30 min  — quiet night
-const BOOST_MS   = 2.5 * 60_000;  // 2.5 min — night-boost after finding a load
+const ACTIVE_MS  = 30_000;         // 30 s   — daytime
+const NIGHT_MS   = 30  * 60_000;  // 30 min — quiet night
+const BOOST_MS   = 30_000;         // 30 s   — night-boost after finding a load
 const BOOST_TTL  = 30  * 60_000;  // keep boost 30 min after last activity
 
 // Active window in local DZ time: 09:00 – 18:30
