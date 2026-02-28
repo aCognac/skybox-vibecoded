@@ -11,8 +11,6 @@ services:
       - /mnt/tank/appdata/skybox:/data
     environment:
       PORT: "3001"
-      # Replace with the IP/hostname of your RPi5 (or * to allow all)
-      CORS_ORIGIN: "http://192.168.1.x:5173"
-      DZ_ID: "2351"  # ← your DZ's Burble ID
+      DZ_ID: "2351"      # ← your DZ's Burble ID
       DZ_TZ: "Europe/Brussels"  # ← IANA timezone for active-hours window
       DB_PATH: /data/loads.db

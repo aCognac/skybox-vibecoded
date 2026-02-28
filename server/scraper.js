@@ -78,47 +78,28 @@ function isDaytime() {
 /**
  * Extract a flat jumper list from a load object.
  *
- * Burble returns jumpers either as:
- *   loadObj.groups  – array of groups, each with a nested slots/jumpers array
- *   loadObj.slots   – flat array of slot objects at the load level
+ * Burble returns groups as an array of arrays:
+ *   [ [slot, slot, …], [slot], … ]
+ * Each slot: { name, type, team_name, jump, formation_type_name, rig_name, … }
  */
 function parseJumpers(loadObj) {
   const jumpers = [];
 
   if (Array.isArray(loadObj.groups)) {
     for (const group of loadObj.groups) {
-      const group_name = group.name || group.group_name || null;
-      const formation  = group.formation || null;
-      const groupSlots = Array.isArray(group.slots)   ? group.slots
-                       : Array.isArray(group.jumpers) ? group.jumpers
-                       : [];
-
-      for (const slot of groupSlots) {
-        const name = slot.name || slot.jumper_name || slot.display_name || "";
+      // Each group element is itself an array of slot objects
+      const slots = Array.isArray(group) ? group : [group];
+      for (const slot of slots) {
+        const name = slot.name || "";
         if (!name) continue;
         jumpers.push({
           name,
-          type:       slot.type || slot.jump_type   || null,
-          group_name: group_name,
-          formation:  formation,
-          rig:        slot.rig  || slot.rig_name    || null,
+          type:       slot.type       || null,
+          group_name: slot.team_name  || null,
+          formation:  slot.jump       || slot.formation_type_name || null,
+          rig:        slot.rig_name   || null,
         });
       }
-    }
-  }
-
-  // Fall back to a flat slots array if groups yielded nothing
-  if (jumpers.length === 0 && Array.isArray(loadObj.slots)) {
-    for (const slot of loadObj.slots) {
-      const name = slot.name || slot.jumper_name || slot.display_name || "";
-      if (!name) continue;
-      jumpers.push({
-        name,
-        type:       slot.type       || slot.jump_type  || null,
-        group_name: slot.group_name || null,
-        formation:  slot.formation  || null,
-        rig:        slot.rig        || slot.rig_name   || null,
-      });
     }
   }
 

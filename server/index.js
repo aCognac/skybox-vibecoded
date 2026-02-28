@@ -1,15 +1,20 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { startScraper } from "./scraper.js";
 import { getLoadsByDate, getLoadById, getDates } from "./db.js";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 const app = express();
 const PORT = process.env.PORT || 3001;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 
 app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
+app.use(express.static(join(__dirname, "public")));
 
 // ── routes ───────────────────────────────────────────────────────────────────
 
