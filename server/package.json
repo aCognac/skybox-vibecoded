@@ -16,6 +16,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "suncalc": "^1.9.0",
     "tough-cookie": "^4.1.4"
   },
   "devDependencies": {

@@ -1,14 +1,16 @@
 import axios from "axios";
 import { wrapper } from "axios-cookiejar-support";
 import { CookieJar } from "tough-cookie";
-import { saveDepartedLoad } from "./db.js";
+import SunCalc from "suncalc";
+import { saveDepartedLoad, confirmDeparted } from "./db.js";
 
 // ── DZ config ─────────────────────────────────────────────────────────────────
-// Future: replace with an array of DZ configs loaded from env / a config file.
 
 const DZ = {
-  id: process.env.DZ_ID || "2351",
-  tz: process.env.DZ_TZ || "Europe/Brussels",
+  id:  process.env.DZ_ID  || "2351",
+  tz:  process.env.DZ_TZ  || "Europe/Madrid",
+  lat: parseFloat(process.env.DZ_LAT || "37.16"),
+  lon: parseFloat(process.env.DZ_LON || "-5.61"),
 };
 
 const BASE_URL = "https://dzm.burblesoft.eu";
@@ -17,14 +19,10 @@ const API_URL  = "https://eu-displays.burblesoft.eu/ajax_dzm2_frontend_jumperman
 
 // ── schedule constants ────────────────────────────────────────────────────────
 
-const ACTIVE_MS  = 30_000;         // 30 s   — daytime
-const NIGHT_MS   = 30  * 60_000;  // 30 min — quiet night
-const BOOST_MS   = 30_000;         // 30 s   — night-boost after finding a load
-const BOOST_TTL  = 30  * 60_000;  // keep boost 30 min after last activity
-
-// Active window in local DZ time: 09:00 – 18:30
-const ACTIVE_START_MIN = 9 * 60;        // 540
-const ACTIVE_END_MIN   = 18 * 60 + 30; // 1110
+const ACTIVE_MS  = 30_000;        // 30 s  (0.5 min) — daytime
+const NIGHT_MS   = 30 * 60_000;  // 30 min           — quiet night
+const BOOST_MS   = 30_000;        // 30 s             — night-boost after finding a load
+const BOOST_TTL  = 30 * 60_000;  // keep boost 30 min after last activity
 
 // ── http client with cookie jar ───────────────────────────────────────────────
 
@@ -55,22 +53,38 @@ let client = makeClient();
 
 // ── timing helpers ────────────────────────────────────────────────────────────
 
-/** Minutes since midnight in the DZ's local timezone. */
-function dzMinuteOfDay() {
+/** Minutes since midnight for a Date object in the DZ's local timezone. */
+function toLocalMinutes(date) {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: DZ.tz,
     hour: "numeric",
     minute: "numeric",
     hour12: false,
-  }).formatToParts(new Date());
+  }).formatToParts(date);
   const h = parseInt(parts.find(p => p.type === "hour").value);
   const m = parseInt(parts.find(p => p.type === "minute").value);
   return h * 60 + m;
 }
 
+/** Minutes since midnight right now in the DZ's local timezone. */
+function dzMinuteOfDay() {
+  return toLocalMinutes(new Date());
+}
+
+/** Returns { sunriseMin, sunsetMin } in DZ local minutes-since-midnight. */
+function getSolarWindow() {
+  const now   = new Date();
+  const times = SunCalc.getTimes(now, DZ.lat, DZ.lon);
+  return {
+    sunriseMin: toLocalMinutes(times.sunrise),
+    sunsetMin:  toLocalMinutes(times.sunset),
+  };
+}
+
 function isDaytime() {
   const m = dzMinuteOfDay();
-  return m >= ACTIVE_START_MIN && m < ACTIVE_END_MIN;
+  const { sunriseMin, sunsetMin } = getSolarWindow();
+  return m >= sunriseMin && m < sunsetMin;
 }
 
 // ── parsing ───────────────────────────────────────────────────────────────────
@@ -104,6 +118,36 @@ function parseJumpers(loadObj) {
   }
 
   return jumpers;
+}
+
+/**
+ * Determine if a load should be captured and whether it is confirmed departed.
+ *
+ * Burble normally sets status = "departed" when the plane leaves.
+ * Sometimes it skips that state and the slot count drops to 0 or -1 instead.
+ * We capture both cases:
+ *   - confirmed  → status === "departed"
+ *   - unconfirmed → status is a number ≤ 0, OR open_slots / slots field ≤ 0
+ *
+ * Returns null if the load should be skipped entirely.
+ */
+function classifyLoad(loadObj) {
+  const statusStr = String(loadObj.status ?? "").trim();
+
+  if (statusStr.toLowerCase() === "departed") return "confirmed";
+
+  // Numeric status value (Burble sometimes uses "0" or "-1" as status)
+  const statusNum = Number(statusStr);
+  if (!isNaN(statusNum) && statusNum <= 0) return "unconfirmed";
+
+  // Explicit open-slot count fields
+  const openSlots =
+    typeof loadObj.open_slots === "number" ? loadObj.open_slots :
+    typeof loadObj.slots      === "number" ? loadObj.slots      :
+    null;
+  if (openSlots !== null && openSlots <= 0) return "unconfirmed";
+
+  return null; // still active / loading
 }
 
 // ── scrape ────────────────────────────────────────────────────────────────────
@@ -154,13 +198,27 @@ export async function scrape() {
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const departed = [];
+  const toProcess = [];
+  let firstUnconfirmedLogged = false;
 
   for (const loadObj of apiLoads) {
-    if (loadObj.status?.toLowerCase() !== "departed") continue;
+    const kind = classifyLoad(loadObj);
+    if (!kind) continue;
 
-    // One-time debug log: show groups/slots structure of the first departed load
-    if (departed.length === 0) {
+    // One-time debug log for the first unconfirmed (0/-1) load
+    if (kind === "unconfirmed" && !firstUnconfirmedLogged) {
+      firstUnconfirmedLogged = true;
+      console.log(`[scraper] first unconfirmed load debug: ${JSON.stringify({
+        id:     loadObj.id,
+        name:   loadObj.name,
+        status: loadObj.status,
+        open_slots: loadObj.open_slots,
+        slots:  typeof loadObj.slots === "number" ? loadObj.slots : "(array/other)",
+      })}`);
+    }
+
+    // One-time debug log for the first confirmed load (kept from original)
+    if (kind === "confirmed" && toProcess.filter(t => t.kind === "confirmed").length === 0) {
       console.log(`[scraper] first departed load debug: ${JSON.stringify({
         id:     loadObj.id,
         name:   loadObj.name,
@@ -186,37 +244,51 @@ export async function scrape() {
 
     const jumpers = parseJumpers(loadObj);
 
-    departed.push({
+    toProcess.push({
+      kind,
       load: {
         burble_load_id,
         load_number,
         aircraft,
         load_master,
-        date:        today,
-        departed_at: new Date().toISOString(),
+        date:               today,
+        departed_at:        new Date().toISOString(),
+        confirmed_departed: kind === "confirmed" ? 1 : 0,
       },
       jumpers,
     });
   }
 
-  let saved = 0;
-  for (const { load, jumpers } of departed) {
+  let saved = 0, upgraded = 0;
+
+  for (const { kind, load, jumpers } of toProcess) {
+    // If newly confirmed, upgrade any existing unconfirmed record first.
+    if (kind === "confirmed") {
+      if (confirmDeparted(load.burble_load_id)) {
+        upgraded++;
+        console.log(
+          `[scraper] confirmed load #${load.load_number} (${load.aircraft}) — was unconfirmed`
+        );
+      }
+    }
+
     if (saveDepartedLoad(load, jumpers)) {
       saved++;
+      const label = kind === "confirmed" ? "departed" : "slots ≤0 (unconfirmed)";
       console.log(
         `[scraper] saved load #${load.load_number} (${load.aircraft}) ` +
-        `– ${jumpers.length} jumpers`
+        `[${label}] – ${jumpers.length} jumpers`
       );
     }
   }
 
-  if (departed.length > 0 && saved === 0) {
-    console.log(`[scraper] ${departed.length} departed load(s) already in DB`);
-  } else if (departed.length === 0) {
-    console.log(`[scraper] no departed loads visible`);
+  if (toProcess.length > 0 && saved === 0 && upgraded === 0) {
+    console.log(`[scraper] ${toProcess.length} load(s) already in DB`);
+  } else if (toProcess.length === 0) {
+    console.log(`[scraper] no captured loads visible`);
   }
 
-  return saved > 0;
+  return saved > 0 || upgraded > 0;
 }
 
 // ── smart scheduler ───────────────────────────────────────────────────────────
@@ -241,17 +313,18 @@ function modeLabel() {
 async function tick() {
   const found = await scrape();
   const delay = nextInterval(found);
-  const mins  = delay / 60_000;
+  const mins  = (delay / 60_000).toFixed(1);
   console.log(`[scraper] next check in ${mins} min (${modeLabel()}, tz: ${DZ.tz})`);
   setTimeout(tick, delay);
 }
 
 export function startScraper() {
+  const { sunriseMin, sunsetMin } = getSolarWindow();
+  const fmt = m => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   console.log(
-    `[scraper] starting for DZ ${DZ.id} (tz: ${DZ.tz}) — ` +
-    `daytime ${ACTIVE_MS / 60_000} min | ` +
-    `night ${NIGHT_MS / 60_000} min | ` +
-    `night-boost ${BOOST_MS / 60_000} min`
+    `[scraper] starting for DZ ${DZ.id} (tz: ${DZ.tz}, lat: ${DZ.lat}, lon: ${DZ.lon})\n` +
+    `[scraper] solar window today: ${fmt(sunriseMin)} – ${fmt(sunsetMin)} | ` +
+    `daytime every ${ACTIVE_MS / 1000}s | night ${NIGHT_MS / 60_000} min`
   );
   tick();
 }

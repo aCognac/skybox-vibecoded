@@ -11,6 +11,8 @@ services:
       - /mnt/tank/appdata/skybox:/data
     environment:
       PORT: "3001"
-      DZ_ID: "2351"      # ← your DZ's Burble ID
-      DZ_TZ: "Europe/Brussels"  # ← IANA timezone for active-hours window
+      DZ_ID: "2351"           # ← your DZ's Burble ID
+      DZ_TZ: "Europe/Madrid"  # ← IANA timezone
+      DZ_LAT: "37.16"         # ← DZ latitude  (Skydive Spain, near Seville)
+      DZ_LON: "-5.61"         # ← DZ longitude
       DB_PATH: /data/loads.db
