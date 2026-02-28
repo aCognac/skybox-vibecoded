@@ -12,8 +12,9 @@ const DZ = {
   tz: process.env.DZ_TZ || "Europe/Brussels",
 };
 
-const BASE_URL    = "https://dzm.burblesoft.eu";
-const MANIFEST_URL = `${BASE_URL}/jmp?dz_id=${DZ.id}`;
+const BASE_URL = "https://dzm.burblesoft.eu";
+const PAGE_URL = `${BASE_URL}/jmp?dz_id=${DZ.id}`;
+const API_URL  = "https://eu-displays.burblesoft.eu/ajax_dzm2_frontend_jumpermanifestpublic";
 
 // ── schedule constants ────────────────────────────────────────────────────────
 
@@ -82,101 +83,144 @@ function parseDate($) {
   return d.toISOString().slice(0, 10);
 }
 
-function parseLoads($, date) {
-  const results = [];
+/** Parse a single load's HTML fragment. Returns null if not departed. */
+function parseLoadFragment(html, loadObj, date) {
+  const $ = cheerio.load(html);
 
-  $("[id^='jumpermanifest-load-']").each((_i, el) => {
-    const $load = $(el);
+  const statusText = $(".load-info-mins").first().text().trim();
+  if (statusText.toLowerCase() !== "departed") return null;
 
-    const statusText = $load.find(".load-info-mins").text().trim();
-    if (statusText.toLowerCase() !== "departed") return;
+  const $headerTds = $(".load-toolbar table td");
+  const aircraft    = $headerTds.eq(0).find("span").first().text().trim();
+  const load_number = parseInt($headerTds.eq(0).find(".load-info-big b").first().text().trim());
+  const load_master = $(".ex-info td div[style*='float']").text().trim() || null;
 
-    const burble_load_id = el.attribs.id.replace("jumpermanifest-load-", "");
+  // Prefer a load ID from the JSON object, fall back to the HTML element ID
+  const htmlId = $("[id^='jumpermanifest-load-']").first().attr("id");
+  const burble_load_id =
+    String(loadObj?.id ?? loadObj?.load_id ?? "").replace("jumpermanifest-load-", "") ||
+    (htmlId ? htmlId.replace("jumpermanifest-load-", "") : String(Date.now()));
 
-    const $headerTds = $load.find(".load-toolbar table td");
-    const aircraft = $headerTds.eq(0).find("span").first().text().trim();
-    const load_number = parseInt(
-      $headerTds.eq(0).find(".load-info-big b").first().text().trim()
-    );
+  const jumpers = [];
+  $("table.is-sj, table.is-student").each((_j, row) => {
+    const $tds = $(row).find("tr td");
+    if (!$tds.length) return;
 
-    const load_master =
-      $load.find(".ex-info td div[style*='float']").text().trim() || null;
+    const cells = $tds
+      .map((_k, td) => $(td).text().replace(/\u00a0/g, "").trim())
+      .get();
 
-    const jumpers = [];
-    $load.find("table.is-sj, table.is-student").each((_j, row) => {
-      const $tds = $(row).find("tr td");
-      if (!$tds.length) return;
+    const name = cells[0];
+    if (!name) return;
 
-      const cells = $tds
-        .map((_k, td) => $(td).text().replace(/\u00a0/g, "").trim())
-        .get();
+    let type, group_name, formation, rig;
+    if (cells.length >= 6) {
+      [, type, group_name, formation, rig] = cells;
+    } else {
+      [, type, formation, rig] = cells;
+      group_name = "";
+    }
 
-      const name = cells[0];
-      if (!name) return;
-
-      let type, group_name, formation, rig;
-      if (cells.length >= 6) {
-        [, type, group_name, formation, rig] = cells;
-      } else {
-        [, type, formation, rig] = cells;
-        group_name = "";
-      }
-
-      jumpers.push({
-        name,
-        type:       type       || null,
-        group_name: group_name || null,
-        formation:  formation  || null,
-        rig:        rig        || null,
-      });
-    });
-
-    results.push({
-      load: {
-        burble_load_id,
-        load_number,
-        aircraft,
-        load_master,
-        date,
-        departed_at: new Date().toISOString(),
-      },
-      jumpers,
+    jumpers.push({
+      name,
+      type:       type       || null,
+      group_name: group_name || null,
+      formation:  formation  || null,
+      rig:        rig        || null,
     });
   });
 
-  return results;
+  return {
+    load: { burble_load_id, load_number, aircraft, load_master, date, departed_at: new Date().toISOString() },
+    jumpers,
+  };
 }
 
 // ── scrape ────────────────────────────────────────────────────────────────────
 
 /** Returns true if any new loads were saved to DB. */
 export async function scrape() {
-  let html;
+  let apiLoads;
   try {
-    // Pre-flight: hit the base URL first so Burble sets any session cookies,
-    // then fetch the manifest with the Referer set.
-    await client.get(BASE_URL, {
-      headers: { Referer: BASE_URL + "/" },
+    // Pre-flight: visit the public manifest page so Burble sets session cookies.
+    await client.get(PAGE_URL, { maxRedirects: 5 });
+
+    const params = new URLSearchParams({
+      action:          "getLoads",
+      dz_id:           DZ.id,
+      aircraft:        "0",
+      columns:         "4",
+      display_tandem:  "1",
+      display_student: "1",
+      display_sport:   "1",
+      display_menu:    "1",
+      font_size:       "0",
+      date_format:     "d/m/Y",
+      acl_application: "Burble DZM",
+    });
+
+    const res = await client.post(API_URL, params.toString(), {
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer":      "https://eu-displays.burblesoft.eu/jmp",
+        "Accept":       "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+      },
       maxRedirects: 5,
     });
 
-    const res = await client.get(MANIFEST_URL, {
-      headers: { Referer: BASE_URL + "/" },
-      maxRedirects: 5,
-    });
-    html = res.data;
+    const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+
+    if (!data?.success || !Array.isArray(data.loads)) {
+      console.error(`[scraper] unexpected API response: ${JSON.stringify(data).slice(0, 300)}`);
+      return false;
+    }
+
+    apiLoads = data.loads;
   } catch (err) {
     console.error(`[scraper] fetch failed: ${err.message}`);
-    // Recreate the client on failure so stale cookies don't linger
     client = makeClient();
     return false;
   }
 
-  const $ = cheerio.load(html);
-  const loadCount = $("[id^='jumpermanifest-load-']").length;
-  console.log(`[scraper] html length: ${html.length}, load panels found: ${loadCount}`);
-  const date = parseDate($);
-  const departed = parseLoads($, date);
+  // Debug: log the structure of the first load object on the first run
+  if (apiLoads.length > 0 && typeof apiLoads[0] === "object") {
+    const keys = Object.keys(apiLoads[0]);
+    console.log(`[scraper] load[0] keys: ${keys.join(", ")}`);
+    console.log(`[scraper] load[0] preview: ${JSON.stringify(apiLoads[0]).slice(0, 300)}`);
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const departed = [];
+
+  for (const loadObj of apiLoads) {
+    // Extract the HTML fragment from the load object.
+    // Try common property names, then fall back to any string property with HTML.
+    let html = "";
+    if (typeof loadObj === "string") {
+      html = loadObj;
+    } else {
+      for (const key of ["html", "content", "data", "response", "body"]) {
+        if (typeof loadObj[key] === "string" && loadObj[key].includes("<")) {
+          html = loadObj[key];
+          break;
+        }
+      }
+      if (!html) {
+        for (const val of Object.values(loadObj)) {
+          if (typeof val === "string" && val.includes("<div") && val.length > 200) {
+            html = val;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!html) continue;
+
+    const result = parseLoadFragment(html, loadObj, today);
+    if (result) departed.push(result);
+  }
 
   let saved = 0;
   for (const { load, jumpers } of departed) {
