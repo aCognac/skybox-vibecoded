@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Skybox — Status</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0d0f1a;
+      --card:     #181b2a;
+      --border:   #272b3f;
+      --accent:   #5b8def;
+      --text:     #d8dff0;
+      --muted:    #64697e;
+      --green:    #4ade80;
+      --red:      #f87171;
+      --yellow:   #fbbf24;
+      --radius:   10px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px 28px;
+      background: #10121e;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .logo { font-size: 1.1rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+    .page-title { font-size: 0.88rem; color: var(--muted); }
+
+    .header-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+
+    .live-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+      animation: pulse 2s infinite;
+    }
+    .live-dot.stale { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); animation: none; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.35; }
+    }
+
+    .live-label { font-size: 0.78rem; color: var(--muted); }
+
+    nav-link, a.nav-link {
+      font-size: 0.82rem;
+      color: var(--accent);
+      text-decoration: none;
+      opacity: 0.8;
+    }
+    a.nav-link:hover { opacity: 1; }
+
+    main { max-width: 960px; margin: 0 auto; padding: 28px 20px; display: flex; flex-direction: column; gap: 20px; }
+
+    /* ── stat cards ── */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+    }
+
+    .stat-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 6px; }
+    .stat-value { font-size: 1.6rem; font-weight: 700; color: var(--text); line-height: 1; }
+    .stat-sub   { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+
+    /* ── log panel ── */
+    .log-panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .log-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      background: #10121e;
+    }
+
+    .log-toolbar-title { font-size: 0.82rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+
+    .filter-btns { display: flex; gap: 6px; }
+
+    .filter-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .filter-btn.active        { color: var(--text);    border-color: var(--accent); }
+    .filter-btn.active.error  { color: var(--red);     border-color: var(--red); }
+
+    .scroll-btn {
+      margin-left: auto;
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+    .scroll-btn:hover { color: var(--text); }
+
+    .log-box {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.78rem;
+      line-height: 1.6;
+      overflow-y: auto;
+      max-height: 520px;
+      padding: 12px 0;
+    }
+
+    .log-line {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 1px 16px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .log-line:hover { background: rgba(255,255,255,0.025); }
+    .log-line.error .log-msg { color: var(--red); }
+
+    .log-ts  { color: var(--muted); flex-shrink: 0; font-size: 0.72rem; }
+    .log-msg { flex: 1; color: var(--text); }
+
+    .empty { text-align: center; color: var(--muted); padding: 40px 0; font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo">Skybox</span>
+  <span class="page-title">/ status</span>
+  <div class="header-right">
+    <div class="live-dot" id="dot"></div>
+    <span class="live-label" id="live-label">connecting…</span>
+    <a class="nav-link" href="/">Load History</a>
+  </div>
+</header>
+
+<main>
+  <div class="stats" id="stats">
+    <div class="stat-card">
+      <div class="stat-label">Days recorded</div>
+      <div class="stat-value" id="stat-days">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Log lines buffered</div>
+      <div class="stat-value" id="stat-lines">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Last scraper message</div>
+      <div class="stat-value" id="stat-last-ts" style="font-size:1rem;padding-top:4px">—</div>
+      <div class="stat-sub"  id="stat-last-msg"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Errors (session)</div>
+      <div class="stat-value" id="stat-errors" style="color:var(--green)">0</div>
+    </div>
+  </div>
+
+  <div class="log-panel">
+    <div class="log-toolbar">
+      <span class="log-toolbar-title">Console log</span>
+      <div class="filter-btns">
+        <button class="filter-btn active"       id="btn-all"   onclick="setFilter('all')">All</button>
+        <button class="filter-btn"              id="btn-scraper" onclick="setFilter('scraper')">[scraper]</button>
+        <button class="filter-btn active error" id="btn-error" onclick="setFilter('error')" style="display:none">Errors</button>
+      </div>
+      <button class="scroll-btn" onclick="toggleStick()" id="stick-btn">↓ Follow</button>
+    </div>
+    <div class="log-box" id="log-box">
+      <p class="empty">Loading…</p>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+let filter    = "all";
+let stick     = true;   // auto-scroll to bottom
+let allLines  = [];
+let lastCount = 0;
+let errorCount = 0;
+let stale     = false;
+
+// ── filter ──────────────────────────────────────────────────────────────────
+
+function setFilter(f) {
+  filter = f;
+  document.getElementById("btn-all").classList.toggle("active", f === "all");
+  document.getElementById("btn-scraper").classList.toggle("active", f === "scraper");
+  document.getElementById("btn-error").classList.toggle("active", f === "error");
+  renderLines();
+}
+
+// ── scroll stick ────────────────────────────────────────────────────────────
+
+function toggleStick() {
+  stick = !stick;
+  document.getElementById("stick-btn").textContent = stick ? "↓ Follow" : "↑ Paused";
+  if (stick) scrollBottom();
+}
+
+function scrollBottom() {
+  const box = document.getElementById("log-box");
+  box.scrollTop = box.scrollHeight;
+}
+
+// ── render ──────────────────────────────────────────────────────────────────
+
+function fmtTs(iso) {
+  const d = new Date(iso);
+  return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function esc(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function renderLines() {
+  const box = document.getElementById("log-box");
+  const visible = allLines.filter(l => {
+    if (filter === "error")   return l.level === "error";
+    if (filter === "scraper") return l.msg.includes("[scraper]");
+    return true;
+  });
+
+  if (!visible.length) {
+    box.innerHTML = '<p class="empty">No log entries yet.</p>';
+    return;
+  }
+
+  box.innerHTML = visible.map(l => `
+    <div class="log-line ${l.level === "error" ? "error" : ""}">
+      <span class="log-ts">${esc(fmtTs(l.ts))}</span>
+      <span class="log-msg">${esc(l.msg)}</span>
+    </div>`).join("");
+
+  if (stick) scrollBottom();
+}
+
+// ── stats ──────────────────────────────────────────────────────────────────
+
+function updateStats() {
+  document.getElementById("stat-lines").textContent = allLines.length;
+
+  const errors = allLines.filter(l => l.level === "error").length;
+  const errEl  = document.getElementById("stat-errors");
+  errEl.textContent = errors;
+  errEl.style.color = errors > 0 ? "var(--red)" : "var(--green)";
+
+  // Show error filter button only if there are errors
+  document.getElementById("btn-error").style.display = errors > 0 ? "" : "none";
+
+  // Last scraper line
+  const scraperLines = allLines.filter(l => l.msg.includes("[scraper]"));
+  if (scraperLines.length) {
+    const last = scraperLines[scraperLines.length - 1];
+    document.getElementById("stat-last-ts").textContent  = fmtTs(last.ts);
+    document.getElementById("stat-last-msg").textContent = last.msg.replace("[scraper]", "").trim();
+  }
+}
+
+// ── poll /api/logs ──────────────────────────────────────────────────────────
+
+async function pollLogs() {
+  try {
+    const res  = await fetch("/api/logs");
+    const data = await res.json();
+    allLines = data;
+    if (stale) { stale = false; setLive(true); }
+    renderLines();
+    updateStats();
+  } catch (e) {
+    stale = true;
+    setLive(false);
+  }
+}
+
+// ── poll /api/dates for day count ──────────────────────────────────────────
+
+async function pollDates() {
+  try {
+    const res   = await fetch("/api/dates");
+    const dates = await res.json();
+    document.getElementById("stat-days").textContent = dates.length;
+  } catch { /* ignore */ }
+}
+
+// ── live indicator ─────────────────────────────────────────────────────────
+
+let lastOk = Date.now();
+
+function setLive(ok) {
+  const dot   = document.getElementById("dot");
+  const label = document.getElementById("live-label");
+  if (ok) {
+    lastOk = Date.now();
+    dot.classList.remove("stale");
+    label.textContent = "live";
+  } else {
+    dot.classList.add("stale");
+    label.textContent = "server unreachable";
+  }
+}
+
+// ── init ───────────────────────────────────────────────────────────────────
+
+setLive(true);
+pollLogs();
+pollDates();
+setInterval(pollLogs,  3000);
+setInterval(pollDates, 30000);
+</script>
+</body>
+</html>

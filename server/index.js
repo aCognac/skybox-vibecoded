@@ -6,6 +6,23 @@ import { fileURLToPath } from "url";
 import { startScraper } from "./scraper.js";
 import { getLoadsByDate, getLoadById, getDates } from "./db.js";
 
+// ── log ring buffer ───────────────────────────────────────────────────────────
+
+const LOG_RING = [];
+const LOG_MAX  = 300;
+
+function capture(level, args) {
+  const ts  = new Date().toISOString();
+  const msg = args.map(a => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+  LOG_RING.push({ ts, level, msg });
+  if (LOG_RING.length > LOG_MAX) LOG_RING.shift();
+}
+
+const _log = console.log.bind(console);
+const _err = console.error.bind(console);
+console.log   = (...a) => { _log(...a);  capture("info",  a); };
+console.error = (...a) => { _err(...a);  capture("error", a); };
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const app = express();
@@ -38,6 +55,9 @@ app.get("/api/loads/:id", (req, res) => {
 
 /** GET /health */
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
+
+/** GET /api/logs — recent log ring buffer */
+app.get("/api/logs", (_req, res) => res.json(LOG_RING));
 
 // ── start ────────────────────────────────────────────────────────────────────
 

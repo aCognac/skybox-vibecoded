@@ -136,9 +136,10 @@ function classifyLoad(loadObj) {
 
   if (statusStr.toLowerCase() === "departed") return "confirmed";
 
-  // Numeric status value (Burble sometimes uses "0" or "-1" as status)
+  // Numeric status value (Burble sometimes uses "0" or "-1" as status).
+  // Guard statusStr !== "" because Number("") === 0, which would falsely match.
   const statusNum = Number(statusStr);
-  if (!isNaN(statusNum) && statusNum <= 0) return "unconfirmed";
+  if (statusStr !== "" && !isNaN(statusNum) && statusNum <= 0) return "unconfirmed";
 
   // Explicit open-slot count fields
   const openSlots =
