@@ -1,0 +1,54 @@
+.color-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.color-presets {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.preset-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  transition: border-color 0.15s, transform 0.1s;
+}
+
+.preset-swatch.active,
+.preset-swatch:hover {
+  border-color: var(--text);
+  transform: scale(1.1);
+}
+
+.color-custom {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.custom-preview {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.color-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.color-hex {
+  font-family: monospace;
+  font-size: 14px;
+  color: var(--muted);
+}

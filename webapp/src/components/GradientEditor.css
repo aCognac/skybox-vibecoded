@@ -1,0 +1,44 @@
+.gradient-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.gradient-preview {
+  height: 48px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.gradient-stops {
+  display: flex;
+  gap: 20px;
+}
+
+.stop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stop-label {
+  font-size: 13px;
+  color: var(--muted);
+  width: 34px;
+}
+
+.stop input[type="color"] {
+  width: 36px;
+  height: 36px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.stop-hex {
+  font-family: monospace;
+  font-size: 13px;
+  color: var(--muted);
+}
