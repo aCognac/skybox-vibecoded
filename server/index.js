@@ -33,7 +33,40 @@ app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
 app.use(express.static(join(__dirname, "public"), { extensions: ["html"] }));
 
+// ── LED state (in-memory) ─────────────────────────────────────────────────────
+
+const DEFAULT_STATE = {
+  scene:      "solid",
+  on:         true,
+  color:      "#ff6600",
+  colors:     ["#ff6600", "#003366"],
+  speed:      1.0,
+  brightness: 128,
+};
+
+let ledState = { ...DEFAULT_STATE };
+
 // ── routes ───────────────────────────────────────────────────────────────────
+
+/** GET /api/state/full — full state for the webapp */
+app.get("/api/state/full", (_req, res) => res.json(ledState));
+
+/** GET /api/state — simplified state for the RPi daemon (off → scene:"off") */
+app.get("/api/state", (_req, res) => {
+  res.json(ledState.on ? ledState : { ...ledState, scene: "off" });
+});
+
+/** PATCH /api/state — webapp updates one or more fields */
+app.patch("/api/state", (req, res) => {
+  ledState = { ...ledState, ...req.body };
+  res.json(ledState);
+});
+
+/** POST /api/state/reset — webapp resets everything to defaults */
+app.post("/api/state/reset", (_req, res) => {
+  ledState = { ...DEFAULT_STATE };
+  res.json(ledState);
+});
 
 /** GET /api/dates — list of days that have recorded loads */
 app.get("/api/dates", (_req, res) => {
