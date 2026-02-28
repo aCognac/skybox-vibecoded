@@ -1,0 +1,33 @@
+# dependencies
+node_modules/
+webapp/node_modules/
+server/node_modules/
+
+# build output
+webapp/dist/
+webapp/.vite/
+
+# env files (keep .env.example)
+.env
+rpi/.env
+server/.env
+webapp/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+rpi/venv/
+rpi/*.egg-info/
+rpi/dist/
+rpi/build/
+
+# editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# misc
+.DS_Store
+Thumbs.db

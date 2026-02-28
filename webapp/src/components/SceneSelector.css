@@ -1,0 +1,39 @@
+.scene-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+
+.scene-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.scene-btn.active {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+  background: #1e1a2e;
+}
+
+.scene-btn:hover:not(.active) {
+  border-color: #3a3a5a;
+  color: var(--text);
+}
+
+.scene-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.scene-label {
+  font-weight: 500;
+}

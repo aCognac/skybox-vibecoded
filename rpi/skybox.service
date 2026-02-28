@@ -1,0 +1,15 @@
+[Unit]
+Description=Skybox LED Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/skybox/rpi
+EnvironmentFile=/home/pi/skybox/rpi/.env
+ExecStart=/home/pi/skybox/rpi/venv/bin/python daemon.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

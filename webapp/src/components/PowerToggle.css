@@ -1,0 +1,22 @@
+.power-toggle {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.power-toggle.on {
+  background: #1e2e1e;
+  border-color: #4caf50;
+  color: #4caf50;
+}
+
+.power-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
