@@ -1,0 +1,18 @@
+services:
+  skybox-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      # Change this path to a TrueNAS dataset you want the DB to live in
+      - /mnt/tank/appdata/skybox:/data
+    environment:
+      PORT: "3001"
+      # Replace with the IP/hostname of your RPi5 (or * to allow all)
+      CORS_ORIGIN: "http://192.168.1.x:5173"
+      DZ_ID: "2351"
+      SCRAPE_INTERVAL_MINS: "10"
+      DB_PATH: /data/loads.db
