@@ -173,6 +173,8 @@ export async function scrape() {
   }
 
   const $ = cheerio.load(html);
+  const loadCount = $("[id^='jumpermanifest-load-']").length;
+  console.log(`[scraper] html length: ${html.length}, load panels found: ${loadCount}`);
   const date = parseDate($);
   const departed = parseLoads($, date);
 
