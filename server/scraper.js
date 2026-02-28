@@ -1,46 +1,81 @@
 import axios from "axios";
+import { wrapper } from "axios-cookiejar-support";
+import { CookieJar } from "tough-cookie";
 import * as cheerio from "cheerio";
 import { saveDepartedLoad } from "./db.js";
 
-const DZ_ID = process.env.DZ_ID || "2351";
-const MANIFEST_URL = `https://dzm.burblesoft.eu/jmp?dz_id=${DZ_ID}`;
+// ── DZ config ─────────────────────────────────────────────────────────────────
+// Future: replace with an array of DZ configs loaded from env / a config file.
+
+const DZ = {
+  id: process.env.DZ_ID || "2351",
+  tz: process.env.DZ_TZ || "Europe/Brussels",
+};
+
+const BASE_URL    = "https://dzm.burblesoft.eu";
+const MANIFEST_URL = `${BASE_URL}/jmp?dz_id=${DZ.id}`;
 
 // ── schedule constants ────────────────────────────────────────────────────────
 
-const ACTIVE_MS   = 2.5 * 60_000;  // 2.5 min  — daytime
-const NIGHT_MS    = 30  * 60_000;  // 30 min   — quiet night
-const BOOST_MS    = 2.5 * 60_000;  // 2.5 min  — night boost (activity detected)
-const BOOST_TTL   = 30  * 60_000;  // keep boost for 30 min after last find
+const ACTIVE_MS  = 2.5 * 60_000;  // 2.5 min — daytime
+const NIGHT_MS   = 30  * 60_000;  // 30 min  — quiet night
+const BOOST_MS   = 2.5 * 60_000;  // 2.5 min — night-boost after finding a load
+const BOOST_TTL  = 30  * 60_000;  // keep boost 30 min after last activity
 
-// Local hours (server clock): active window 09:00 – 18:30
-const ACTIVE_START_MIN = 9 * 60;          // 540
-const ACTIVE_END_MIN   = 18 * 60 + 30;   // 1110
+// Active window in local DZ time: 09:00 – 18:30
+const ACTIVE_START_MIN = 9 * 60;        // 540
+const ACTIVE_END_MIN   = 18 * 60 + 30; // 1110
 
-const HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "en-GB,en;q=0.9",
-  "Cache-Control": "no-cache",
-};
+// ── http client with cookie jar ───────────────────────────────────────────────
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+function makeClient() {
+  const jar = new CookieJar();
+  return wrapper(axios.create({
+    jar,
+    withCredentials: true,
+    timeout: 15_000,
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-GB,en;q=0.9",
+      "Cache-Control": "no-cache",
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none",
+      "Upgrade-Insecure-Requests": "1",
+    },
+  }));
+}
 
-function minuteOfDay() {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
+// One persistent client for the lifetime of the process.
+// Re-using it keeps the session cookie alive between polls.
+let client = makeClient();
+
+// ── timing helpers ────────────────────────────────────────────────────────────
+
+/** Minutes since midnight in the DZ's local timezone. */
+function dzMinuteOfDay() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: DZ.tz,
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  }).formatToParts(new Date());
+  const h = parseInt(parts.find(p => p.type === "hour").value);
+  const m = parseInt(parts.find(p => p.type === "minute").value);
+  return h * 60 + m;
 }
 
 function isDaytime() {
-  const m = minuteOfDay();
+  const m = dzMinuteOfDay();
   return m >= ACTIVE_START_MIN && m < ACTIVE_END_MIN;
 }
 
 // ── parsing ───────────────────────────────────────────────────────────────────
 
 function parseDate($) {
-  // " - Saturday, February, 2026"  →  "2026-02-28"
   const raw = $(".dt-date").text().trim().replace(/^-\s*/, "");
   const d = new Date(raw);
   if (isNaN(d)) return new Date().toISOString().slice(0, 10);
@@ -53,25 +88,20 @@ function parseLoads($, date) {
   $("[id^='jumpermanifest-load-']").each((_i, el) => {
     const $load = $(el);
 
-    // ── status: only process departed loads ───────────────────────────────
     const statusText = $load.find(".load-info-mins").text().trim();
     if (statusText.toLowerCase() !== "departed") return;
 
-    // ── burble internal load id ───────────────────────────────────────────
     const burble_load_id = el.attribs.id.replace("jumpermanifest-load-", "");
 
-    // ── load header: aircraft & load number ──────────────────────────────
     const $headerTds = $load.find(".load-toolbar table td");
     const aircraft = $headerTds.eq(0).find("span").first().text().trim();
     const load_number = parseInt(
       $headerTds.eq(0).find(".load-info-big b").first().text().trim()
     );
 
-    // ── load master ───────────────────────────────────────────────────────
     const load_master =
       $load.find(".ex-info td div[style*='float']").text().trim() || null;
 
-    // ── jumpers ───────────────────────────────────────────────────────────
     const jumpers = [];
     $load.find("table.is-sj, table.is-student").each((_j, row) => {
       const $tds = $(row).find("tr td");
@@ -84,7 +114,6 @@ function parseLoads($, date) {
       const name = cells[0];
       if (!name) return;
 
-      // Column layout varies: 5-col (no group) vs 6-col (with group)
       let type, group_name, formation, rig;
       if (cells.length >= 6) {
         [, type, group_name, formation, rig] = cells;
@@ -120,14 +149,26 @@ function parseLoads($, date) {
 
 // ── scrape ────────────────────────────────────────────────────────────────────
 
-/** Returns true if any new loads were found (saved to DB). */
+/** Returns true if any new loads were saved to DB. */
 export async function scrape() {
   let html;
   try {
-    const res = await axios.get(MANIFEST_URL, { headers: HEADERS, timeout: 15_000 });
+    // Pre-flight: hit the base URL first so Burble sets any session cookies,
+    // then fetch the manifest with the Referer set.
+    await client.get(BASE_URL, {
+      headers: { Referer: BASE_URL + "/" },
+      maxRedirects: 5,
+    });
+
+    const res = await client.get(MANIFEST_URL, {
+      headers: { Referer: BASE_URL + "/" },
+      maxRedirects: 5,
+    });
     html = res.data;
   } catch (err) {
     console.error(`[scraper] fetch failed: ${err.message}`);
+    // Recreate the client on failure so stale cookies don't linger
+    client = makeClient();
     return false;
   }
 
@@ -168,21 +209,26 @@ function nextInterval(foundActivity) {
   return boosted ? BOOST_MS : NIGHT_MS;
 }
 
+function modeLabel() {
+  if (isDaytime()) return "daytime";
+  if (Date.now() - lastActivityAt < BOOST_TTL) return "night-boost";
+  return "night";
+}
+
 async function tick() {
   const found = await scrape();
   const delay = nextInterval(found);
-  const label = delay < 60_000
-    ? `${delay / 1000}s`
-    : `${delay / 60_000} min`;
-  console.log(`[scraper] next check in ${label} (${isDaytime() ? "daytime" : lastActivityAt && Date.now() - lastActivityAt < BOOST_TTL ? "night-boost" : "night"})`);
+  const mins  = delay / 60_000;
+  console.log(`[scraper] next check in ${mins} min (${modeLabel()}, tz: ${DZ.tz})`);
   setTimeout(tick, delay);
 }
 
 export function startScraper() {
   console.log(
-    `[scraper] starting — daytime ${ACTIVE_MS / 60_000} min | ` +
+    `[scraper] starting for DZ ${DZ.id} (tz: ${DZ.tz}) — ` +
+    `daytime ${ACTIVE_MS / 60_000} min | ` +
     `night ${NIGHT_MS / 60_000} min | ` +
-    `night-boost ${BOOST_MS / 60_000} min for ${BOOST_TTL / 60_000} min after activity`
+    `night-boost ${BOOST_MS / 60_000} min`
   );
   tick();
 }
