@@ -13,6 +13,5 @@ services:
       PORT: "3001"
       # Replace with the IP/hostname of your RPi5 (or * to allow all)
       CORS_ORIGIN: "http://192.168.1.x:5173"
-      DZ_ID: "2351"
-      SCRAPE_INTERVAL_MINS: "10"
+      DZ_ID: "2351"  # ← set your DZ's Burble ID here
       DB_PATH: /data/loads.db

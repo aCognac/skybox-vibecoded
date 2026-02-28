@@ -4,7 +4,17 @@ import { saveDepartedLoad } from "./db.js";
 
 const DZ_ID = process.env.DZ_ID || "2351";
 const MANIFEST_URL = `https://dzm.burblesoft.eu/jmp?dz_id=${DZ_ID}`;
-const INTERVAL_MS = (parseInt(process.env.SCRAPE_INTERVAL_MINS) || 10) * 60_000;
+
+// ── schedule constants ────────────────────────────────────────────────────────
+
+const ACTIVE_MS   = 2.5 * 60_000;  // 2.5 min  — daytime
+const NIGHT_MS    = 30  * 60_000;  // 30 min   — quiet night
+const BOOST_MS    = 2.5 * 60_000;  // 2.5 min  — night boost (activity detected)
+const BOOST_TTL   = 30  * 60_000;  // keep boost for 30 min after last find
+
+// Local hours (server clock): active window 09:00 – 18:30
+const ACTIVE_START_MIN = 9 * 60;          // 540
+const ACTIVE_END_MIN   = 18 * 60 + 30;   // 1110
 
 const HEADERS = {
   "User-Agent":
@@ -14,6 +24,18 @@ const HEADERS = {
   "Accept-Language": "en-GB,en;q=0.9",
   "Cache-Control": "no-cache",
 };
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+function minuteOfDay() {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
+function isDaytime() {
+  const m = minuteOfDay();
+  return m >= ACTIVE_START_MIN && m < ACTIVE_END_MIN;
+}
 
 // ── parsing ───────────────────────────────────────────────────────────────────
 
@@ -65,10 +87,8 @@ function parseLoads($, date) {
       // Column layout varies: 5-col (no group) vs 6-col (with group)
       let type, group_name, formation, rig;
       if (cells.length >= 6) {
-        // 6-col: name | type | group | formation | rig | [img]
         [, type, group_name, formation, rig] = cells;
       } else {
-        // 5-col: name | type | formation | rig | [img]
         [, type, formation, rig] = cells;
         group_name = "";
       }
@@ -100,6 +120,7 @@ function parseLoads($, date) {
 
 // ── scrape ────────────────────────────────────────────────────────────────────
 
+/** Returns true if any new loads were found (saved to DB). */
 export async function scrape() {
   let html;
   try {
@@ -107,7 +128,7 @@ export async function scrape() {
     html = res.data;
   } catch (err) {
     console.error(`[scraper] fetch failed: ${err.message}`);
-    return;
+    return false;
   }
 
   const $ = cheerio.load(html);
@@ -130,12 +151,38 @@ export async function scrape() {
   } else if (departed.length === 0) {
     console.log(`[scraper] no departed loads visible`);
   }
+
+  return saved > 0;
 }
 
-// ── scheduler ─────────────────────────────────────────────────────────────────
+// ── smart scheduler ───────────────────────────────────────────────────────────
+
+let lastActivityAt = 0;
+
+function nextInterval(foundActivity) {
+  if (foundActivity) lastActivityAt = Date.now();
+
+  if (isDaytime()) return ACTIVE_MS;
+
+  const boosted = Date.now() - lastActivityAt < BOOST_TTL;
+  return boosted ? BOOST_MS : NIGHT_MS;
+}
+
+async function tick() {
+  const found = await scrape();
+  const delay = nextInterval(found);
+  const label = delay < 60_000
+    ? `${delay / 1000}s`
+    : `${delay / 60_000} min`;
+  console.log(`[scraper] next check in ${label} (${isDaytime() ? "daytime" : lastActivityAt && Date.now() - lastActivityAt < BOOST_TTL ? "night-boost" : "night"})`);
+  setTimeout(tick, delay);
+}
 
 export function startScraper() {
-  console.log(`[scraper] starting – interval ${INTERVAL_MS / 60_000} min`);
-  scrape(); // run immediately on start
-  setInterval(scrape, INTERVAL_MS);
+  console.log(
+    `[scraper] starting — daytime ${ACTIVE_MS / 60_000} min | ` +
+    `night ${NIGHT_MS / 60_000} min | ` +
+    `night-boost ${BOOST_MS / 60_000} min for ${BOOST_TTL / 60_000} min after activity`
+  );
+  tick();
 }
