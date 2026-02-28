@@ -1,7 +1,6 @@
 import axios from "axios";
 import { wrapper } from "axios-cookiejar-support";
 import { CookieJar } from "tough-cookie";
-import * as cheerio from "cheerio";
 import { saveDepartedLoad } from "./db.js";
 
 // ── DZ config ─────────────────────────────────────────────────────────────────
@@ -76,64 +75,54 @@ function isDaytime() {
 
 // ── parsing ───────────────────────────────────────────────────────────────────
 
-function parseDate($) {
-  const raw = $(".dt-date").text().trim().replace(/^-\s*/, "");
-  const d = new Date(raw);
-  if (isNaN(d)) return new Date().toISOString().slice(0, 10);
-  return d.toISOString().slice(0, 10);
-}
-
-/** Parse a single load's HTML fragment. Returns null if not departed. */
-function parseLoadFragment(html, loadObj, date) {
-  const $ = cheerio.load(html);
-
-  const statusText = $(".load-info-mins").first().text().trim();
-  if (statusText.toLowerCase() !== "departed") return null;
-
-  const $headerTds = $(".load-toolbar table td");
-  const aircraft    = $headerTds.eq(0).find("span").first().text().trim();
-  const load_number = parseInt($headerTds.eq(0).find(".load-info-big b").first().text().trim());
-  const load_master = $(".ex-info td div[style*='float']").text().trim() || null;
-
-  // Prefer a load ID from the JSON object, fall back to the HTML element ID
-  const htmlId = $("[id^='jumpermanifest-load-']").first().attr("id");
-  const burble_load_id =
-    String(loadObj?.id ?? loadObj?.load_id ?? "").replace("jumpermanifest-load-", "") ||
-    (htmlId ? htmlId.replace("jumpermanifest-load-", "") : String(Date.now()));
-
+/**
+ * Extract a flat jumper list from a load object.
+ *
+ * Burble returns jumpers either as:
+ *   loadObj.groups  – array of groups, each with a nested slots/jumpers array
+ *   loadObj.slots   – flat array of slot objects at the load level
+ */
+function parseJumpers(loadObj) {
   const jumpers = [];
-  $("table.is-sj, table.is-student").each((_j, row) => {
-    const $tds = $(row).find("tr td");
-    if (!$tds.length) return;
 
-    const cells = $tds
-      .map((_k, td) => $(td).text().replace(/\u00a0/g, "").trim())
-      .get();
+  if (Array.isArray(loadObj.groups)) {
+    for (const group of loadObj.groups) {
+      const group_name = group.name || group.group_name || null;
+      const formation  = group.formation || null;
+      const groupSlots = Array.isArray(group.slots)   ? group.slots
+                       : Array.isArray(group.jumpers) ? group.jumpers
+                       : [];
 
-    const name = cells[0];
-    if (!name) return;
-
-    let type, group_name, formation, rig;
-    if (cells.length >= 6) {
-      [, type, group_name, formation, rig] = cells;
-    } else {
-      [, type, formation, rig] = cells;
-      group_name = "";
+      for (const slot of groupSlots) {
+        const name = slot.name || slot.jumper_name || slot.display_name || "";
+        if (!name) continue;
+        jumpers.push({
+          name,
+          type:       slot.type || slot.jump_type   || null,
+          group_name: group_name,
+          formation:  formation,
+          rig:        slot.rig  || slot.rig_name    || null,
+        });
+      }
     }
+  }
 
-    jumpers.push({
-      name,
-      type:       type       || null,
-      group_name: group_name || null,
-      formation:  formation  || null,
-      rig:        rig        || null,
-    });
-  });
+  // Fall back to a flat slots array if groups yielded nothing
+  if (jumpers.length === 0 && Array.isArray(loadObj.slots)) {
+    for (const slot of loadObj.slots) {
+      const name = slot.name || slot.jumper_name || slot.display_name || "";
+      if (!name) continue;
+      jumpers.push({
+        name,
+        type:       slot.type       || slot.jump_type  || null,
+        group_name: slot.group_name || null,
+        formation:  slot.formation  || null,
+        rig:        slot.rig        || slot.rig_name   || null,
+      });
+    }
+  }
 
-  return {
-    load: { burble_load_id, load_number, aircraft, load_master, date, departed_at: new Date().toISOString() },
-    jumpers,
-  };
+  return jumpers;
 }
 
 // ── scrape ────────────────────────────────────────────────────────────────────
@@ -161,9 +150,9 @@ export async function scrape() {
 
     const res = await client.post(API_URL, params.toString(), {
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer":      "https://eu-displays.burblesoft.eu/jmp",
-        "Accept":       "application/json, text/javascript, */*; q=0.01",
+        "Content-Type":     "application/x-www-form-urlencoded",
+        "Referer":          "https://eu-displays.burblesoft.eu/jmp",
+        "Accept":           "application/json, text/javascript, */*; q=0.01",
         "X-Requested-With": "XMLHttpRequest",
       },
       maxRedirects: 5,
@@ -183,43 +172,50 @@ export async function scrape() {
     return false;
   }
 
-  // Debug: log the structure of the first load object on the first run
-  if (apiLoads.length > 0 && typeof apiLoads[0] === "object") {
-    const keys = Object.keys(apiLoads[0]);
-    console.log(`[scraper] load[0] keys: ${keys.join(", ")}`);
-    console.log(`[scraper] load[0] preview: ${JSON.stringify(apiLoads[0]).slice(0, 300)}`);
-  }
-
   const today = new Date().toISOString().slice(0, 10);
   const departed = [];
 
   for (const loadObj of apiLoads) {
-    // Extract the HTML fragment from the load object.
-    // Try common property names, then fall back to any string property with HTML.
-    let html = "";
-    if (typeof loadObj === "string") {
-      html = loadObj;
-    } else {
-      for (const key of ["html", "content", "data", "response", "body"]) {
-        if (typeof loadObj[key] === "string" && loadObj[key].includes("<")) {
-          html = loadObj[key];
-          break;
-        }
-      }
-      if (!html) {
-        for (const val of Object.values(loadObj)) {
-          if (typeof val === "string" && val.includes("<div") && val.length > 200) {
-            html = val;
-            break;
-          }
-        }
-      }
+    if (loadObj.status?.toLowerCase() !== "departed") continue;
+
+    // One-time debug log: show groups/slots structure of the first departed load
+    if (departed.length === 0) {
+      console.log(`[scraper] first departed load debug: ${JSON.stringify({
+        id:     loadObj.id,
+        name:   loadObj.name,
+        status: loadObj.status,
+        lm:     loadObj.lm,
+        groups: Array.isArray(loadObj.groups) ? loadObj.groups.slice(0, 1) : loadObj.groups,
+        slots:  Array.isArray(loadObj.slots)  ? loadObj.slots.slice(0, 2)  : loadObj.slots,
+      })}`);
     }
 
-    if (!html) continue;
+    const burble_load_id = String(loadObj.id);
 
-    const result = parseLoadFragment(html, loadObj, today);
-    if (result) departed.push(result);
+    // "G-CKSE 15" → aircraft="G-CKSE", load_number=15
+    const nameParts   = (loadObj.name || "").split(" ");
+    const load_number = parseInt(nameParts[nameParts.length - 1]) || 0;
+    const aircraft    = loadObj.aircraft_name
+                     || nameParts.slice(0, -1).join(" ")
+                     || "";
+
+    const lm          = loadObj.lm;
+    const load_master = typeof lm === "string" ? lm
+                      : (lm?.name || lm?.display_name || null);
+
+    const jumpers = parseJumpers(loadObj);
+
+    departed.push({
+      load: {
+        burble_load_id,
+        load_number,
+        aircraft,
+        load_master,
+        date:        today,
+        departed_at: new Date().toISOString(),
+      },
+      jumpers,
+    });
   }
 
   let saved = 0;
