@@ -31,7 +31,7 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 
 app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
-app.use(express.static(join(__dirname, "public")));
+app.use(express.static(join(__dirname, "public"), { extensions: ["html"] }));
 
 // ── routes ───────────────────────────────────────────────────────────────────
 

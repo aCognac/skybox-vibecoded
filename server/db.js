@@ -39,6 +39,9 @@ try {
   db.exec(`ALTER TABLE loads ADD COLUMN confirmed_departed INTEGER NOT NULL DEFAULT 1`);
 } catch { /* column already exists */ }
 
+// Remove phantom load_number=0 entries that were saved before the status="" bug fix.
+db.exec(`DELETE FROM loads WHERE load_number = 0`);
+
 // ── queries ──────────────────────────────────────────────────────────────────
 
 const stmtInsertLoad = db.prepare(`
