@@ -8,6 +8,8 @@ const POLL_MS = 2000;
 // Map of deviceName → device info for currently-mounted USB partitions
 const knownDevices = new Map();
 
+// ── Linux (Pi) ────────────────────────────────────────────────────────────────
+
 function runLsblk() {
   return new Promise((resolve, reject) => {
     exec("lsblk -J -o NAME,MOUNTPOINT,LABEL,SIZE,TYPE,TRAN", (err, stdout) => {
@@ -24,7 +26,6 @@ function runLsblk() {
 /** Flatten lsblk tree into a list of mounted USB partitions/disks. */
 function extractUsbMountpoints(blockdevices) {
   const result = [];
-
   function walk(dev, parentTran) {
     const tran = dev.tran || parentTran;
     if (dev.mountpoint && tran === "usb") {
@@ -40,15 +41,66 @@ function extractUsbMountpoints(blockdevices) {
       for (const child of dev.children) walk(child, tran);
     }
   }
-
   for (const dev of blockdevices) walk(dev, null);
   return result;
 }
 
+async function getMountedDevicesLinux() {
+  const { blockdevices } = await runLsblk();
+  return extractUsbMountpoints(blockdevices);
+}
+
+// ── macOS (dev) ───────────────────────────────────────────────────────────────
+
+function runDiskutil() {
+  return new Promise((resolve, reject) => {
+    exec("diskutil list -plist external", (err, stdout) => {
+      if (err) return reject(err);
+      // Parse the plist AllDisksAndPartitions array
+      // We only need the disk identifiers; mount info comes from diskutil info
+      const matches = [...stdout.matchAll(/<string>(disk\d+s\d+)<\/string>/g)];
+      resolve(matches.map((m) => m[1]));
+    });
+  });
+}
+
+function runDiskutilInfo(disk) {
+  return new Promise((resolve, reject) => {
+    exec(`diskutil info -plist ${disk}`, (err, stdout) => {
+      if (err) return reject(err);
+      const get = (key) => {
+        const m = stdout.match(new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`));
+        return m ? m[1] : null;
+      };
+      const getBool = (key) => {
+        const m = stdout.match(new RegExp(`<key>${key}</key>\\s*<(true|false)/>`));
+        return m ? m[1] === "true" : false;
+      };
+      resolve({
+        deviceName: disk,
+        mountPoint: get("MountPoint"),
+        label: get("VolumeName") || disk,
+        size: get("TotalSize"),
+        removable: getBool("Removable") || getBool("RemovableMediaOrExternalDevice"),
+      });
+    });
+  });
+}
+
+async function getMountedDevicesMac() {
+  const partitions = await runDiskutil();
+  const infos = await Promise.all(partitions.map((d) => runDiskutilInfo(d).catch(() => null)));
+  return infos.filter((d) => d && d.mountPoint && d.removable);
+}
+
+// ── platform dispatcher ───────────────────────────────────────────────────────
+
+const IS_MAC = process.platform === "darwin";
+const getMountedDevices = IS_MAC ? getMountedDevicesMac : getMountedDevicesLinux;
+
 async function poll() {
   try {
-    const { blockdevices } = await runLsblk();
-    const current = extractUsbMountpoints(blockdevices);
+    const current = await getMountedDevices();
     const currentMap = new Map(current.map((d) => [d.deviceName, d]));
 
     // New insertions
@@ -69,9 +121,8 @@ async function poll() {
       }
     }
   } catch (err) {
-    // lsblk unavailable (dev machine) — only log first time
     if (!poll._warned) {
-      console.warn(`[sdDetect] lsblk unavailable, SD detection disabled: ${err.message}`);
+      console.warn(`[sdDetect] SD detection error (${process.platform}): ${err.message}`);
       poll._warned = true;
     }
   }
@@ -80,7 +131,7 @@ async function poll() {
 }
 
 export function startSdDetect() {
-  console.log("[sdDetect] starting USB SD card detection (polling every 2s)");
+  console.log(`[sdDetect] starting SD card detection via ${IS_MAC ? "diskutil (macOS)" : "lsblk (Linux)"}, polling every 2s`);
   poll();
 }
 
