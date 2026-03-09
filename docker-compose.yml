@@ -6,13 +6,31 @@ services:
     restart: unless-stopped
     ports:
       - "3001:3001"
+    # On a Raspberry Pi with a USB SD card reader:
+    # - Add "privileged: true" OR mount specific /dev/sd* devices to enable lsblk SD detection
+    # - Mount the NVMe drive so copied footage has somewhere to land
+    # privileged: true
     volumes:
-      # Change this path to a TrueNAS dataset you want the DB to live in
+      # SQLite database + persistent data
       - /mnt/tank/appdata/skybox:/data
+      # NVMe footage storage (Pi: adjust to your actual NVMe mount point)
+      # - /mnt/nvme/skybox:/mnt/nvme/skybox
     environment:
       PORT: "3001"
-      DZ_ID: "2351"           # ← your DZ's Burble ID
-      DZ_TZ: "Europe/Madrid"  # ← IANA timezone
-      DZ_LAT: "37.16"         # ← DZ latitude  (Skydive Spain, near Seville)
-      DZ_LON: "-5.61"         # ← DZ longitude
-      DB_PATH: /data/loads.db
+
+      # ── Storage ────────────────────────────────────────────────────────────
+      DB_PATH: /data/skybox.db
+      # Root dir where footage is copied from SD cards
+      # Adjust to match the volume mount above
+      MEDIA_ROOT: /mnt/nvme/skybox
+
+      # ── Nextcloud (TrueNAS at home) ────────────────────────────────────────
+      NEXTCLOUD_URL: ""          # e.g. https://nextcloud.yourdomain.com
+      NEXTCLOUD_USER: ""         # Nextcloud username
+      NEXTCLOUD_PASSWORD: ""     # Use an app password, not your login password
+
+      # ── Burble DZ ──────────────────────────────────────────────────────────
+      DZ_ID: "2351"              # ← your DZ's Burble ID
+      DZ_TZ: "Europe/Madrid"     # ← IANA timezone
+      DZ_LAT: "37.16"            # ← DZ latitude
+      DZ_LON: "-5.61"            # ← DZ longitude

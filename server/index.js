@@ -3,98 +3,329 @@ import express from "express";
 import cors from "cors";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { randomUUID } from "crypto";
+import { createReadStream, statSync } from "fs";
+
 import { startScraper } from "./scraper.js";
-import { getLoadsByDate, getLoadById, getDates } from "./db.js";
+import {
+  getLoadsByDate,
+  getLoadById,
+  getDates,
+  createSdSession,
+  ejectSdSession,
+  getActiveSession,
+  insertFiles,
+  getFilesBySession,
+  getFilesByIds,
+  updateFileAssignment,
+  updateFileCopyStatus,
+  getFilesForSync,
+} from "./db.js";
+import { startSdDetect, sdEvents, getCurrentDevices } from "./services/sdDetect.js";
+import { scanSdCard } from "./services/scanner.js";
+import { runCopyJob, copyEvents } from "./services/copier.js";
+import { runSyncBatch, checkConnectivity } from "./services/nextcloud.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── log ring buffer ───────────────────────────────────────────────────────────
 
 const LOG_RING = [];
 const LOG_MAX  = 300;
-
 function capture(level, args) {
   const ts  = new Date().toISOString();
-  const msg = args.map(a => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+  const msg = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
   LOG_RING.push({ ts, level, msg });
   if (LOG_RING.length > LOG_MAX) LOG_RING.shift();
 }
-
 const _log = console.log.bind(console);
 const _err = console.error.bind(console);
 console.log   = (...a) => { _log(...a);  capture("info",  a); };
 console.error = (...a) => { _err(...a);  capture("error", a); };
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+// ── SSE helpers ───────────────────────────────────────────────────────────────
 
-const app = express();
+const sdSseClients  = new Set();
+const copySseClients = new Map(); // jobId → Set<res>
+
+function sseWrite(res, event, data) {
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function broadcastSd(event, data) {
+  for (const res of sdSseClients) sseWrite(res, event, data);
+}
+
+function broadcastCopy(jobId, event, data) {
+  const clients = copySseClients.get(jobId);
+  if (!clients) return;
+  for (const res of clients) sseWrite(res, event, data);
+}
+
+// ── Wire SD events ────────────────────────────────────────────────────────────
+
+sdEvents.on("inserted", async (device) => {
+  console.log(`[server] SD inserted: ${device.deviceName} at ${device.mountPoint}`);
+  const sessionId = createSdSession(device);
+  broadcastSd("sd_inserted", { ...device, sessionId });
+
+  try {
+    const files = await scanSdCard(device.mountPoint);
+    console.log(`[server] scanned ${files.length} file(s) from ${device.mountPoint}`);
+
+    const dbFiles = files.map((f) => ({
+      original_name: f.original_name,
+      original_path: f.original_path,
+      size_bytes:    f.size_bytes,
+      duration_secs: f.duration_secs,
+      recorded_at:   f.recorded_at,
+      camera_type:   f.camera_type,
+    }));
+    insertFiles(sessionId, dbFiles);
+
+    const saved = getFilesBySession(sessionId).map((f) => ({
+      ...f,
+      jumped_with: JSON.parse(f.jumped_with || "[]"),
+    }));
+    broadcastSd("files_scanned", { sessionId, count: saved.length, files: saved });
+  } catch (err) {
+    console.error(`[server] scan error: ${err.message}`);
+    broadcastSd("scan_error", { sessionId, error: err.message });
+  }
+});
+
+sdEvents.on("removed", (device) => {
+  const session = getActiveSession();
+  if (session && session.device_name === device.deviceName) {
+    ejectSdSession(session.id);
+  }
+  broadcastSd("sd_removed", { deviceName: device.deviceName });
+});
+
+// ── Wire copy events ──────────────────────────────────────────────────────────
+
+copyEvents.on("progress",   (d) => broadcastCopy(d.jobId, "progress",   d));
+copyEvents.on("file_start", (d) => broadcastCopy(d.jobId, "file_start", d));
+copyEvents.on("file_done",  (d) => {
+  updateFileCopyStatus(d.fileId, { copyStatus: "done", localPath: d.localPath });
+  broadcastCopy(d.jobId, "file_done", d);
+});
+copyEvents.on("file_error", (d) => {
+  updateFileCopyStatus(d.fileId, { copyStatus: "error", localPath: null });
+  broadcastCopy(d.jobId, "file_error", d);
+});
+copyEvents.on("job_done", (d) => {
+  broadcastCopy(d.jobId, "job_done", d);
+  setTimeout(() => copySseClients.delete(d.jobId), 5000);
+});
+
+// ── Express app ───────────────────────────────────────────────────────────────
+
+const app  = express();
 const PORT = process.env.PORT || 3001;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 
-app.use(cors({ origin: CORS_ORIGIN }));
+app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
 app.use(express.json());
 app.use(express.static(join(__dirname, "public"), { extensions: ["html"] }));
 
-// ── LED state (in-memory) ─────────────────────────────────────────────────────
+// ── SD Card ───────────────────────────────────────────────────────────────────
 
-const DEFAULT_STATE = {
-  scene:      "solid",
-  on:         true,
-  color:      "#ff6600",
-  colors:     ["#ff6600", "#003366"],
-  speed:      1.0,
-  brightness: 128,
-};
+app.get("/api/sd/events", (req, res) => {
+  res.set({ "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  res.flushHeaders();
 
-let ledState = { ...DEFAULT_STATE };
+  // Send current state immediately on connect
+  const session = getActiveSession();
+  if (session) {
+    const files = getFilesBySession(session.id).map((f) => ({
+      ...f,
+      jumped_with: JSON.parse(f.jumped_with || "[]"),
+    }));
+    sseWrite(res, "sd_inserted", {
+      deviceName: session.device_name,
+      mountPoint: session.mount_point,
+      label:      session.label,
+      size:       session.size,
+      sessionId:  session.id,
+    });
+    if (files.length > 0) {
+      sseWrite(res, "files_scanned", { sessionId: session.id, count: files.length, files });
+    }
+  } else {
+    sseWrite(res, "sd_status", { inserted: false });
+  }
 
-// ── routes ───────────────────────────────────────────────────────────────────
-
-/** GET /api/state/full — full state for the webapp */
-app.get("/api/state/full", (_req, res) => res.json(ledState));
-
-/** GET /api/state — simplified state for the RPi daemon (off → scene:"off") */
-app.get("/api/state", (_req, res) => {
-  res.json(ledState.on ? ledState : { ...ledState, scene: "off" });
+  const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
+  sdSseClients.add(res);
+  req.on("close", () => { clearInterval(ping); sdSseClients.delete(res); });
 });
 
-/** PATCH /api/state — webapp updates one or more fields */
-app.patch("/api/state", (req, res) => {
-  ledState = { ...ledState, ...req.body };
-  res.json(ledState);
+app.get("/api/sd/status", (_req, res) => {
+  const session = getActiveSession();
+  if (!session) return res.json({ inserted: false });
+  const files = getFilesBySession(session.id).map((f) => ({
+    ...f,
+    jumped_with: JSON.parse(f.jumped_with || "[]"),
+  }));
+  res.json({ inserted: true, session, files });
 });
 
-/** POST /api/state/reset — webapp resets everything to defaults */
-app.post("/api/state/reset", (_req, res) => {
-  ledState = { ...DEFAULT_STATE };
-  res.json(ledState);
+app.post("/api/sd/scan", async (_req, res) => {
+  const session = getActiveSession();
+  if (!session) return res.status(404).json({ error: "No SD card mounted" });
+  try {
+    const files = await scanSdCard(session.mount_point);
+    insertFiles(session.id, files.map((f) => ({
+      original_name: f.original_name,
+      original_path: f.original_path,
+      size_bytes:    f.size_bytes,
+      duration_secs: f.duration_secs,
+      recorded_at:   f.recorded_at,
+      camera_type:   f.camera_type,
+    })));
+    const saved = getFilesBySession(session.id).map((f) => ({
+      ...f,
+      jumped_with: JSON.parse(f.jumped_with || "[]"),
+    }));
+    broadcastSd("files_scanned", { sessionId: session.id, count: saved.length, files: saved });
+    res.json({ sessionId: session.id, count: saved.length, files: saved });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-/** GET /api/dates — list of days that have recorded loads */
-app.get("/api/dates", (_req, res) => {
-  res.json(getDates());
+// ── Files ─────────────────────────────────────────────────────────────────────
+
+app.get("/api/files", (req, res) => {
+  const sessionId = req.query.session_id;
+  if (!sessionId) return res.status(400).json({ error: "session_id required" });
+  const files = getFilesBySession(Number(sessionId)).map((f) => ({
+    ...f,
+    jumped_with: JSON.parse(f.jumped_with || "[]"),
+  }));
+  res.json(files);
 });
 
-/** GET /api/loads?date=YYYY-MM-DD — all departed loads for a day */
+app.patch("/api/files/:id", (req, res) => {
+  const id = Number(req.params.id);
+  const { ownerName, loadId, jumpedWith, finalName } = req.body;
+  const updated = updateFileAssignment(id, { ownerName, loadId, jumpedWith, finalName });
+  if (!updated) return res.status(404).json({ error: "File not found" });
+  res.json({ ...updated, jumped_with: JSON.parse(updated.jumped_with || "[]") });
+});
+
+/** GET /api/files/:id/stream — range-capable video stream for in-app preview */
+app.get("/api/files/:id/stream", (req, res) => {
+  const [file] = getFilesByIds([Number(req.params.id)]);
+  if (!file) return res.status(404).json({ error: "Not found" });
+
+  const filePath = file.local_path || file.original_path;
+  if (!filePath) return res.status(404).json({ error: "No path available" });
+
+  let stat;
+  try { stat = statSync(filePath); } catch { return res.status(404).json({ error: "File not on disk" }); }
+
+  const { range } = req.headers;
+  if (range) {
+    const [startStr, endStr] = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(startStr);
+    const end   = endStr ? parseInt(endStr) : stat.size - 1;
+    res.writeHead(206, {
+      "Content-Range":  `bytes ${start}-${end}/${stat.size}`,
+      "Accept-Ranges":  "bytes",
+      "Content-Length": end - start + 1,
+      "Content-Type":   "video/mp4",
+    });
+    createReadStream(filePath, { start, end }).pipe(res);
+  } else {
+    res.writeHead(200, { "Content-Length": stat.size, "Content-Type": "video/mp4", "Accept-Ranges": "bytes" });
+    createReadStream(filePath).pipe(res);
+  }
+});
+
+// ── Copy ──────────────────────────────────────────────────────────────────────
+
+app.post("/api/copy", async (req, res) => {
+  const { fileIds } = req.body;
+  if (!Array.isArray(fileIds) || fileIds.length === 0) {
+    return res.status(400).json({ error: "fileIds array required" });
+  }
+  const files = getFilesByIds(fileIds.map(Number));
+  if (files.length === 0) return res.status(404).json({ error: "No files found" });
+
+  const jobId = randomUUID();
+  for (const f of files) updateFileCopyStatus(f.id, { copyStatus: "copying", localPath: null });
+
+  runCopyJob(jobId, files).catch((err) =>
+    console.error(`[copy] job ${jobId} failed: ${err.message}`)
+  );
+
+  res.json({ jobId, fileCount: files.length });
+});
+
+app.get("/api/copy/events/:jobId", (req, res) => {
+  res.set({ "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  res.flushHeaders();
+  const { jobId } = req.params;
+  const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
+  if (!copySseClients.has(jobId)) copySseClients.set(jobId, new Set());
+  copySseClients.get(jobId).add(res);
+  req.on("close", () => { clearInterval(ping); copySseClients.get(jobId)?.delete(res); });
+});
+
+// ── Sync ──────────────────────────────────────────────────────────────────────
+
+app.get("/api/sync/status", async (_req, res) => {
+  const pending = getFilesForSync().length;
+  const online  = await checkConnectivity();
+  res.json({ pending, online, nextcloudUrl: process.env.NEXTCLOUD_URL || null });
+});
+
+app.post("/api/sync/trigger", async (_req, res) => {
+  try {
+    const synced = await runSyncBatch();
+    res.json({ synced });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Loads ─────────────────────────────────────────────────────────────────────
+
+app.get("/api/dates", (_req, res) => res.json(getDates()));
+
 app.get("/api/loads", (req, res) => {
   const date = req.query.date || new Date().toISOString().slice(0, 10);
   res.json(getLoadsByDate(date));
 });
 
-/** GET /api/loads/:id — single load with full jumper list */
 app.get("/api/loads/:id", (req, res) => {
   const load = getLoadById(Number(req.params.id));
   if (!load) return res.status(404).json({ error: "Not found" });
   res.json(load);
 });
 
-/** GET /health */
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
+// ── Health / Logs ─────────────────────────────────────────────────────────────
 
-/** GET /api/logs — recent log ring buffer */
+app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.get("/api/logs", (_req, res) => res.json(LOG_RING));
 
-// ── start ────────────────────────────────────────────────────────────────────
+// ── Background sync ───────────────────────────────────────────────────────────
+
+async function syncLoop() {
+  try {
+    await runSyncBatch();
+  } catch (err) {
+    console.error(`[sync] batch error: ${err.message}`);
+  }
+  setTimeout(syncLoop, 5 * 60_000); // every 5 minutes
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`Skybox server listening on http://localhost:${PORT}`);
+  startSdDetect();
   startScraper();
+  setTimeout(syncLoop, 30_000); // first sync after 30s
 });
