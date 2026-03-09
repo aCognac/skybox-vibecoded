@@ -1,0 +1,47 @@
+# Raspberry Pi deployment — serves the captive portal webapp and handles SD cards
+#
+# The Pi runs in AP mode at the DZ. Skydivers connect to its WiFi and open
+# the webapp on their phones to sort footage.
+#
+# When the Pi has internet connectivity it:
+#   - Syncs today's loads from the TrueNAS server (LOADS_SOURCE_URL)
+#   - Uploads copied footage to Nextcloud (NEXTCLOUD_*)
+#
+# NOTE: For USB SD card auto-detection the container needs privileged mode
+# (or individual /dev/sdX device mounts). Alternatively run the server
+# directly on the Pi with: cd server && node index.js
+#
+# Usage:
+#   docker compose -f docker-compose.pi.yml up -d
+
+services:
+  skybox-pi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    privileged: true  # needed for lsblk USB detection
+    ports:
+      - "80:3001"   # serve on port 80 so skydivers just hit http://skybox.local
+    volumes:
+      # Persistent DB
+      - /data/skybox:/data
+      # NVMe drive where footage is copied — adjust to your actual mount
+      - /mnt/nvme/skybox:/mnt/nvme/skybox
+    environment:
+      PORT: "3001"
+      DB_PATH: /data/skybox.db
+      MEDIA_ROOT: /mnt/nvme/skybox
+
+      # ── Loads source (TrueNAS server) ──────────────────────────────────────
+      # Setting this switches to Pi mode: syncs loads from here, no Burble scraper
+      LOADS_SOURCE_URL: "http://truenas.local:3001"  # ← adjust to your TrueNAS IP/hostname
+
+      # ── Nextcloud ──────────────────────────────────────────────────────────
+      NEXTCLOUD_URL: ""          # e.g. https://nextcloud.yourdomain.com
+      NEXTCLOUD_USER: ""         # Nextcloud username
+      NEXTCLOUD_PASSWORD: ""     # Use an app password
+
+      # ── Burble DZ (for display only, not scraped on Pi) ─────────────────
+      DZ_ID: "2351"
+      DZ_TZ: "Europe/Madrid"

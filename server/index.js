@@ -7,6 +7,7 @@ import { randomUUID } from "crypto";
 import { createReadStream, statSync } from "fs";
 
 import { startScraper } from "./scraper.js";
+import { startLoadsSync } from "./services/loadsSync.js";
 import {
   getLoadsByDate,
   getLoadById,
@@ -324,8 +325,16 @@ async function syncLoop() {
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`Skybox server listening on http://localhost:${PORT}`);
-  startSdDetect();
-  startScraper();
-  setTimeout(syncLoop, 30_000); // first sync after 30s
+  const mode = process.env.LOADS_SOURCE_URL ? "pi" : "truenas";
+  console.log(`Skybox server listening on http://localhost:${PORT} [mode: ${mode}]`);
+
+  if (mode === "pi") {
+    // Pi: sync loads from TrueNAS, handle SD cards, upload to Nextcloud
+    startSdDetect();
+    startLoadsSync();
+    setTimeout(syncLoop, 30_000); // first Nextcloud sync after 30s
+  } else {
+    // TrueNAS: scrape Burble 24/7, no SD card handling
+    startScraper();
+  }
 });

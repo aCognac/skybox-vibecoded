@@ -1,36 +1,29 @@
+# TrueNAS deployment — runs the Burble scraper 24/7
+# Build context is the repo root (needs access to both server/ and webapp/)
+#
+# Usage:
+#   docker compose up -d
+
 services:
   skybox-server:
     build:
-      context: ./server
+      context: .
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
       - "3001:3001"
-    # On a Raspberry Pi with a USB SD card reader:
-    # - Add "privileged: true" OR mount specific /dev/sd* devices to enable lsblk SD detection
-    # - Mount the NVMe drive so copied footage has somewhere to land
-    # privileged: true
     volumes:
-      # SQLite database + persistent data
+      # Persistent DB storage — change to your TrueNAS dataset path
       - /mnt/tank/appdata/skybox:/data
-      # NVMe footage storage (Pi: adjust to your actual NVMe mount point)
-      # - /mnt/nvme/skybox:/mnt/nvme/skybox
     environment:
       PORT: "3001"
-
-      # ── Storage ────────────────────────────────────────────────────────────
       DB_PATH: /data/skybox.db
-      # Root dir where footage is copied from SD cards
-      # Adjust to match the volume mount above
-      MEDIA_ROOT: /mnt/nvme/skybox
 
-      # ── Nextcloud (TrueNAS at home) ────────────────────────────────────────
-      NEXTCLOUD_URL: ""          # e.g. https://nextcloud.yourdomain.com
-      NEXTCLOUD_USER: ""         # Nextcloud username
-      NEXTCLOUD_PASSWORD: ""     # Use an app password, not your login password
+      # No LOADS_SOURCE_URL → TrueNAS mode: runs Burble scraper, no SD handling
+      # LOADS_SOURCE_URL is intentionally absent here
 
       # ── Burble DZ ──────────────────────────────────────────────────────────
-      DZ_ID: "2351"              # ← your DZ's Burble ID
-      DZ_TZ: "Europe/Madrid"     # ← IANA timezone
-      DZ_LAT: "37.16"            # ← DZ latitude
-      DZ_LON: "-5.61"            # ← DZ longitude
+      DZ_ID: "2351"           # ← your DZ's Burble ID
+      DZ_TZ: "Europe/Madrid"  # ← IANA timezone
+      DZ_LAT: "37.16"         # ← DZ latitude  (Skydive Spain, near Seville)
+      DZ_LON: "-5.61"         # ← DZ longitude
