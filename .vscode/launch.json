@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "Open webapp in Chrome",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/webapp/src",
+      "preLaunchTask": "Start webapp (dev)"
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug server",
+      "program": "${workspaceFolder}/server/index.js",
+      "cwd": "${workspaceFolder}/server",
+      "runtimeArgs": ["--inspect"],
+      "envFile": "${workspaceFolder}/server/.env"
+    }
+  ]
+}

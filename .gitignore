@@ -23,7 +23,6 @@ rpi/dist/
 rpi/build/
 
 # editors
-.vscode/
 .idea/
 *.swp
 *.swo
