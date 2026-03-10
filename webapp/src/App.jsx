@@ -529,7 +529,8 @@ export default function App() {
                                         </div>
 
                                         <div className="absolute bottom-0 left-0 right-0 p-2 flex items-end justify-between z-10 pointer-events-none gap-1">
-                                          <span className="text-[9px] text-zinc-300 font-mono bg-black/50 backdrop-blur-sm px-1 py-0.5 rounded truncate">
+                                          {/* dir=rtl makes truncation happen at the start, so .mp4 stays visible */}
+                                          <span dir="rtl" className="text-[9px] text-zinc-300 font-mono bg-black/50 backdrop-blur-sm px-1 py-0.5 rounded truncate text-left">
                                             {assignedLoad && cameraOwner
                                               ? generateFileName(file, cameraOwner, assignedLoad, file.jumped_with)
                                               : file.original_name}

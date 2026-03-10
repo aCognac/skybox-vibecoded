@@ -1,9 +1,6 @@
-import { exec }                   from "child_process";
-import { promisify }              from "util";
+import { spawn }                  from "child_process";
 import { existsSync, mkdirSync }  from "fs";
 import { join }                   from "path";
-
-const execAsync = promisify(exec);
 
 const CACHE_DIR = process.env.CACHE_DIR || "/tmp/skybox";
 mkdirSync(CACHE_DIR, { recursive: true });
@@ -11,13 +8,33 @@ mkdirSync(CACHE_DIR, { recursive: true });
 export const thumbnailPath = (fileId) => join(CACHE_DIR, `${fileId}.jpg`);
 export const previewPath   = (fileId) => join(CACHE_DIR, `${fileId}_preview.mp4`);
 
+// ── ffmpeg helpers ─────────────────────────────────────────────────────────────
+
+/** Run ffmpeg with args as an array (no shell — safe with any file path). */
+function ffmpeg(args, timeoutMs = 15_000) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+    const stderr = [];
+    proc.stderr.on("data", (d) => stderr.push(d));
+    const timer = setTimeout(() => {
+      proc.kill("SIGKILL");
+      reject(new Error(`ffmpeg timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg exit ${code}: ${Buffer.concat(stderr).toString().slice(-300)}`));
+    });
+  });
+}
+
 // ── Thumbnail generation ───────────────────────────────────────────────────────
-// Max 3 concurrent ffmpeg thumbnail processes (Pi 5 handles this fine).
-// In-flight map deduplicates requests for the same file.
+// Max THUMB_CONCURRENCY simultaneous ffmpeg processes.
+// In-flight map deduplicates concurrent requests for the same file.
 
 const THUMB_CONCURRENCY = 3;
 let thumbActive = 0;
-const thumbWaiters = [];
+const thumbWaiters  = [];
 const thumbInFlight = new Map(); // fileId → Promise<path>
 
 function acquireThumbSlot() {
@@ -30,30 +47,33 @@ function acquireThumbSlot() {
 
 function releaseThumbSlot() {
   if (thumbWaiters.length > 0) {
-    thumbWaiters.shift()(); // wake next waiter (they already "acquired")
+    thumbWaiters.shift()(); // transfer slot to next waiter (thumbActive stays same)
   } else {
     thumbActive--;
   }
 }
 
 /**
- * Generate (or return cached) a JPEG thumbnail for a video file.
- * Concurrent calls for the same fileId share a single Promise.
- * Max THUMB_CONCURRENCY ffmpeg processes run at once.
+ * Extract a JPEG frame from sourcePath.
+ * Tries seeking to 2s first; falls back to 0s if that fails (handles short clips).
+ * Returns the output path.
  */
 export function generateThumbnail(fileId, sourcePath) {
   const out = thumbnailPath(fileId);
   if (existsSync(out)) return Promise.resolve(out);
-
   if (thumbInFlight.has(fileId)) return thumbInFlight.get(fileId);
 
   const p = acquireThumbSlot()
     .then(async () => {
-      if (existsSync(out)) return out; // another request finished while we waited
-      await execAsync(
-        `ffmpeg -ss 3 -i "${sourcePath}" -vframes 1 -vf "scale=320:-2" -f image2 "${out}" -y`,
-        { timeout: 15_000 }
-      );
+      if (existsSync(out)) return out;
+
+      const base = ["-y", "-vframes", "1", "-vf", "scale=320:-2", "-f", "image2", out];
+      try {
+        await ffmpeg(["-ss", "2", "-i", sourcePath, ...base]);
+      } catch {
+        // Fallback: no seek (handles very short clips or tricky keyframe positions)
+        await ffmpeg(["-i", sourcePath, ...base]);
+      }
       return out;
     })
     .finally(() => {
@@ -66,7 +86,7 @@ export function generateThumbnail(fileId, sourcePath) {
 }
 
 // ── Preview generation ─────────────────────────────────────────────────────────
-// 360p low-quality MP4, one at a time in the background.
+// 360p low-quality MP4, processed one at a time in background.
 
 const previewQueue   = [];
 const previewInQueue = new Set();
@@ -75,11 +95,17 @@ let previewRunning   = false;
 export async function generatePreview(fileId, sourcePath) {
   const out = previewPath(fileId);
   if (existsSync(out)) return out;
-  await execAsync(
-    `ffmpeg -i "${sourcePath}" -vf "scale=-2:360" ` +
-    `-c:v libx264 -preset ultrafast -crf 30 -tune fastdecode ` +
-    `-c:a aac -b:a 64k -movflags +faststart "${out}" -y`,
-    { timeout: 300_000 }
+  await ffmpeg(
+    [
+      "-i", sourcePath,
+      "-vf", "scale=-2:360",
+      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30",
+      "-tune", "fastdecode",
+      "-c:a", "aac", "-b:a", "64k",
+      "-movflags", "+faststart",
+      "-y", out,
+    ],
+    300_000
   );
   return out;
 }
