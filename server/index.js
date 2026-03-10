@@ -126,9 +126,12 @@ sdEvents.on("inserted", async (device) => {
     }));
     broadcastSd("files_scanned", { sessionId, count: saved.length, files: saved });
 
-    // Kick off background preview transcoding (non-blocking)
+    // Kick off background thumbnail + preview generation (non-blocking)
     for (const f of saved) {
-      if (f.original_path) queuePreview(f.id, f.original_path);
+      if (f.original_path) {
+        generateThumbnail(f.id, f.original_path).catch(() => {}); // eagerly pre-generate thumbs
+        queuePreview(f.id, f.original_path);
+      }
     }
   } catch (err) {
     console.error(`[server] scan error: ${err.message}`);

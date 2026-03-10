@@ -528,21 +528,17 @@ export default function App() {
                                           </div>
                                         </div>
 
-                                        <div className="absolute bottom-0 left-0 right-0 p-2 flex flex-col gap-0.5 z-10 pointer-events-none">
-                                          <div className="flex items-center justify-between">
-                                            <span className="text-[9px] text-zinc-300 font-mono bg-black/40 backdrop-blur-sm px-1 py-0.5 rounded truncate max-w-[60%]">
-                                              {file.camera_type || 'video'}
-                                            </span>
-                                            <div className="flex items-center gap-1.5">
-                                              <span className="text-[9px] text-zinc-300 font-mono">{formatDuration(file.duration_secs)}</span>
-                                              <span className="text-[9px] text-zinc-400 font-mono">· {formatBytes(file.size_bytes)}</span>
-                                            </div>
-                                          </div>
-                                          <h3 className="font-medium text-xs truncate text-white drop-shadow-md">
+                                        <div className="absolute bottom-0 left-0 right-0 p-2 flex items-end justify-between z-10 pointer-events-none gap-1">
+                                          <span className="text-[9px] text-zinc-300 font-mono bg-black/50 backdrop-blur-sm px-1 py-0.5 rounded truncate">
                                             {assignedLoad && cameraOwner
                                               ? generateFileName(file, cameraOwner, assignedLoad, file.jumped_with)
                                               : file.original_name}
-                                          </h3>
+                                          </span>
+                                          {file.duration_secs > 0 && (
+                                            <span className="text-[9px] text-zinc-300 font-mono bg-black/50 backdrop-blur-sm px-1 py-0.5 rounded shrink-0">
+                                              {formatDuration(file.duration_secs)}
+                                            </span>
+                                          )}
                                         </div>
                                       </div>
                                     );
