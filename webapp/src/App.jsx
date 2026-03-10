@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   CloudUpload,
   Settings,
-  RefreshCw,
   FileVideo,
   ChevronRight,
   ChevronDown,
@@ -21,6 +20,7 @@ import {
 import {
   subscribeToSdEvents,
   fetchLoads,
+  fetchAllJumpers,
   patchFile,
   startCopy,
   subscribeToCopyEvents,
@@ -122,6 +122,9 @@ export default function App() {
   const [manifestDate, setManifestDate]         = useState(today);
   const [isLoadingManifest, setIsLoadingManifest] = useState(false);
 
+  const [allJumpers, setAllJumpers]               = useState([]);
+  const [scanError, setScanError]                 = useState(null);
+
   const [cameraOwner, setCameraOwner]             = useState(null);
   const [cameraOwnerSearch, setCameraOwnerSearch] = useState('');
 
@@ -134,6 +137,13 @@ export default function App() {
   const [syncStatus, setSyncStatus]   = useState(null);
 
   const [previewFile, setPreviewFile] = useState(null);
+
+  // Load all jumper names from history (for step 2 name picker)
+  useEffect(() => {
+    fetchAllJumpers()
+      .then(setAllJumpers)
+      .catch((err) => console.error('[app] jumpers:', err));
+  }, []);
 
   // Load manifest
   useEffect(() => {
@@ -150,7 +160,7 @@ export default function App() {
       onSdInserted: ({ sessionId: sid }) => {
         setSessionId(sid);
         setSdInserted(true);
-        setTimeout(() => setStep(2), 1500);
+        setScanError(null);
       },
       onFilesScanned: ({ sessionId: sid, files: scanned }) => {
         setSessionId(sid);
@@ -159,6 +169,10 @@ export default function App() {
       onSdRemoved: () => {
         setSdInserted(false);
         setSessionId(null);
+        setScanError(null);
+      },
+      onScanError: ({ error }) => {
+        setScanError(error);
       },
     });
     return () => es.close();
@@ -195,9 +209,7 @@ export default function App() {
   const ownerLoads        = cameraOwner
     ? loads.filter((l) => l.jumpers?.some((j) => j.name === cameraOwner))
     : [];
-  const uniqueJumpers = Array.from(
-    new Set(loads.flatMap((l) => (l.jumpers || []).map((j) => j.name)))
-  ).sort();
+  const uniqueJumpers = allJumpers;
   const filesByDate = files.reduce((acc, f) => {
     const d = f.recorded_at?.slice(0, 10) || 'unknown';
     (acc[d] = acc[d] || []).push(f);
@@ -324,8 +336,13 @@ export default function App() {
                   {sdInserted ? 'SD Card Detected' : 'Insert SD Card'}
                 </h2>
                 <p className="text-zinc-400 mb-8 max-w-[260px]">
-                  {sdInserted ? 'Reading footage from camera...' : "Insert your camera's SD card into the USB reader."}
+                  {sdInserted ? 'SD card ready. Tap to continue.' : "Insert your camera's SD card into the USB reader."}
                 </p>
+                {scanError && (
+                  <div className="mb-4 px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-xl text-sm text-red-400 text-left">
+                    <span className="font-medium">Scan error:</span> {scanError}
+                  </div>
+                )}
                 {sdInserted && (
                   <motion.button initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                     onClick={() => setStep(2)}
@@ -349,16 +366,6 @@ export default function App() {
                   </div>
                   <h2 className="text-2xl font-semibold mb-2">Who are you?</h2>
                   <p className="text-sm text-zinc-400">Select the camera owner to find your loads.</p>
-                </div>
-
-                <div className="flex items-center gap-2 mb-4">
-                  {[{ label: 'Today', val: today }, { label: 'Yesterday', val: yesterday }].map(({ label, val }) => (
-                    <button key={val}
-                      onClick={() => setManifestDate(val)}
-                      className={`px-3 py-1.5 text-xs rounded-lg border transition-all ${manifestDate === val ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400' : 'bg-zinc-800/40 border-zinc-700 text-zinc-400 hover:border-zinc-600'}`}
-                    >{label}</button>
-                  ))}
-                  {isLoadingManifest && <RefreshCw className="w-3 h-3 text-zinc-500 animate-spin ml-1" />}
                 </div>
 
                 <div className="relative mb-6">
@@ -391,9 +398,9 @@ export default function App() {
                           </button>
                         );
                       })}
-                    {uniqueJumpers.length === 0 && !isLoadingManifest && (
+                    {uniqueJumpers.length === 0 && (
                       <p className="text-sm text-zinc-500 text-center py-8">
-                        No loads found. Try a different date or check Burble.
+                        No jumpers in history yet. Check that the server is syncing from Burble.
                       </p>
                     )}
                   </div>

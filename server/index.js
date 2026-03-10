@@ -12,9 +12,11 @@ import {
   getLoadsByDate,
   getLoadById,
   getDates,
+  getAllJumperNames,
   createSdSession,
   ejectSdSession,
   getActiveSession,
+  clearStaleSessions,
   insertFiles,
   getFilesBySession,
   getFilesByIds,
@@ -295,6 +297,8 @@ app.post("/api/sync/trigger", async (_req, res) => {
 
 app.get("/api/dates", (_req, res) => res.json(getDates()));
 
+app.get("/api/jumpers", (_req, res) => res.json(getAllJumperNames()));
+
 app.get("/api/loads", (req, res) => {
   const date = req.query.date || new Date().toISOString().slice(0, 10);
   res.json(getLoadsByDate(date));
@@ -330,6 +334,7 @@ app.listen(PORT, () => {
 
   if (mode === "pi") {
     // Pi: sync loads from TrueNAS, handle SD cards, upload to Nextcloud
+    clearStaleSessions(); // clear any sessions left over from previous run
     startSdDetect();
     startLoadsSync();
     setTimeout(syncLoop, 30_000); // first Nextcloud sync after 30s

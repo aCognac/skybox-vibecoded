@@ -56,6 +56,10 @@ export async function fetchDates() {
   return json(await fetch(`${BASE}/dates`));
 }
 
+export async function fetchAllJumpers() {
+  return json(await fetch(`${BASE}/jumpers`));
+}
+
 // ── Files ─────────────────────────────────────────────────────────────────────
 
 export async function fetchFiles(sessionId) {

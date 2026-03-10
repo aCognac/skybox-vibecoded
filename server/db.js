@@ -148,6 +148,13 @@ export function getDates() {
     .map((r) => r.date);
 }
 
+export function getAllJumperNames() {
+  return db
+    .prepare("SELECT DISTINCT name FROM jumpers WHERE name IS NOT NULL ORDER BY name")
+    .all()
+    .map((r) => r.name);
+}
+
 // ── sd session queries ────────────────────────────────────────────────────────
 
 export function createSdSession({ deviceName, mountPoint, label, size }) {
@@ -170,6 +177,10 @@ export function getActiveSession() {
   return db
     .prepare(`SELECT * FROM sd_sessions WHERE ejected_at IS NULL ORDER BY detected_at DESC LIMIT 1`)
     .get() || null;
+}
+
+export function clearStaleSessions() {
+  db.prepare(`UPDATE sd_sessions SET ejected_at = datetime('now') WHERE ejected_at IS NULL`).run();
 }
 
 // ── file queries ──────────────────────────────────────────────────────────────
