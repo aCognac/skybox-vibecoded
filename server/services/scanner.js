@@ -53,25 +53,27 @@ async function scanDir(dir, cameraType, results) {
     return; // unreadable
   }
 
+  // Collect valid video file entries first
+  const candidates = [];
   for (const entry of entries) {
     if (entry.isDirectory()) continue;
-
     const nameLower = entry.name.toLowerCase();
     const ext = extname(nameLower);
-
     if (SKIP_SUFFIXES.some((s) => nameLower.endsWith(s))) continue;
     if (!VIDEO_EXTS.has(ext)) continue;
+    candidates.push(entry);
+  }
 
+  // Stat + ffprobe all files in parallel
+  await Promise.all(candidates.map(async (entry) => {
     const fullPath = join(dir, entry.name);
     let fileStat;
     try {
       fileStat = await stat(fullPath);
     } catch {
-      continue;
+      return;
     }
-
     const durationSecs = await getVideoDuration(fullPath);
-
     results.push({
       original_name: entry.name,
       original_path: fullPath,
@@ -80,7 +82,7 @@ async function scanDir(dir, cameraType, results) {
       recorded_at: fileStat.mtime.toISOString(),
       camera_type: cameraType,
     });
-  }
+  }));
 }
 
 /**

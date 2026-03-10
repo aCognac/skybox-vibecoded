@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   CloudUpload,
   Settings,
+  RefreshCw,
   FileVideo,
   ChevronRight,
   ChevronDown,
@@ -21,6 +22,7 @@ import {
   subscribeToSdEvents,
   fetchLoads,
   fetchAllJumpers,
+  rescanSd,
   patchFile,
   startCopy,
   subscribeToCopyEvents,
@@ -398,9 +400,24 @@ export default function App() {
                           </button>
                         );
                       })}
-                    {uniqueJumpers.length === 0 && (
+
+                    {/* Custom name: shown when typed text has no exact match */}
+                    {cameraOwnerSearch.trim() &&
+                      !uniqueJumpers.some((j) => j.toLowerCase() === cameraOwnerSearch.trim().toLowerCase()) && (
+                      <button
+                        onClick={() => { setCameraOwner(cameraOwnerSearch.trim()); setStep(3); }}
+                        className="w-full flex items-center justify-between px-3 py-2.5 bg-zinc-800/20 hover:bg-emerald-500/10 border border-dashed border-zinc-700 hover:border-emerald-500/50 rounded-lg transition-all text-left group"
+                      >
+                        <span className="text-sm font-medium text-zinc-400 group-hover:text-emerald-400 transition-colors">
+                          Continue as "<span className="text-zinc-200">{cameraOwnerSearch.trim()}</span>"
+                        </span>
+                        <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-emerald-500 transition-colors" />
+                      </button>
+                    )}
+
+                    {uniqueJumpers.length === 0 && !cameraOwnerSearch.trim() && (
                       <p className="text-sm text-zinc-500 text-center py-8">
-                        No jumpers in history yet. Check that the server is syncing from Burble.
+                        No jumpers in history yet. Type your name above to continue.
                       </p>
                     )}
                   </div>
@@ -432,7 +449,15 @@ export default function App() {
                   <div className="text-center text-zinc-500 py-16">
                     <FileVideo className="w-10 h-10 mx-auto mb-3 opacity-30" />
                     <p className="text-sm">No video files found on this card.</p>
-                    <p className="text-xs mt-1 text-zinc-600">GoPro, Insta360, and DJI folders are scanned automatically.</p>
+                    <p className="text-xs mt-1 text-zinc-600 mb-6">GoPro, Insta360, and DJI folders are scanned automatically.</p>
+                    <button
+                      onClick={async () => {
+                        try { await rescanSd(); } catch (err) { console.error('[app] rescan:', err); }
+                      }}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-300 transition-all"
+                    >
+                      <RefreshCw className="w-4 h-4" /> Rescan Card
+                    </button>
                   </div>
                 ) : (
                   <div className="space-y-4 mb-8">

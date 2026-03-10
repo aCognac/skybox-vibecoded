@@ -4,7 +4,7 @@ import cors from "cors";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { randomUUID } from "crypto";
-import { createReadStream, statSync } from "fs";
+import { createReadStream, statSync, existsSync } from "fs";
 
 import { startScraper } from "./scraper.js";
 import { startLoadsSync } from "./services/loadsSync.js";
@@ -69,6 +69,39 @@ function broadcastCopy(jobId, event, data) {
 
 sdEvents.on("inserted", async (device) => {
   console.log(`[server] SD inserted: ${device.deviceName} at ${device.mountPoint}`);
+
+  // Reuse existing session if this is the same device (e.g. server restarted with card still in)
+  const existingSession = getActiveSession();
+  if (existingSession && existingSession.mount_point === device.mountPoint) {
+    console.log(`[server] reusing existing session ${existingSession.id} for ${device.mountPoint}`);
+    const sessionId = existingSession.id;
+    const existing = getFilesBySession(sessionId).map((f) => ({
+      ...f,
+      jumped_with: JSON.parse(f.jumped_with || "[]"),
+    }));
+    broadcastSd("sd_inserted", { ...device, sessionId });
+    if (existing.length > 0) {
+      broadcastSd("files_scanned", { sessionId, count: existing.length, files: existing });
+      return;
+    }
+    // Session exists but no files yet — fall through to rescan
+    try {
+      const files = await scanSdCard(device.mountPoint);
+      console.log(`[server] scanned ${files.length} file(s) from ${device.mountPoint}`);
+      insertFiles(sessionId, files.map((f) => ({
+        original_name: f.original_name, original_path: f.original_path,
+        size_bytes: f.size_bytes, duration_secs: f.duration_secs,
+        recorded_at: f.recorded_at, camera_type: f.camera_type,
+      })));
+      const saved = getFilesBySession(sessionId).map((f) => ({ ...f, jumped_with: JSON.parse(f.jumped_with || "[]") }));
+      broadcastSd("files_scanned", { sessionId, count: saved.length, files: saved });
+    } catch (err) {
+      console.error(`[server] scan error: ${err.message}`);
+      broadcastSd("scan_error", { sessionId, error: err.message });
+    }
+    return;
+  }
+
   const sessionId = createSdSession(device);
   broadcastSd("sd_inserted", { ...device, sessionId });
 
@@ -334,7 +367,16 @@ app.listen(PORT, () => {
 
   if (mode === "pi") {
     // Pi: sync loads from TrueNAS, handle SD cards, upload to Nextcloud
-    clearStaleSessions(); // clear any sessions left over from previous run
+
+    // Clear sessions whose mount point no longer exists (card was removed while Pi was off).
+    // Sessions whose mount point still exists are kept — sdDetect will pick them up
+    // on first poll and re-register them without firing a new scan.
+    const stale = getActiveSession();
+    if (stale && !existsSync(stale.mount_point)) {
+      console.log(`[server] clearing stale session for ${stale.mount_point} (no longer mounted)`);
+      clearStaleSessions();
+    }
+
     startSdDetect();
     startLoadsSync();
     setTimeout(syncLoop, 30_000); // first Nextcloud sync after 30s
