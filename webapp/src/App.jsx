@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   HardDrive,
@@ -29,36 +29,30 @@ import {
   fetchSyncStatus,
 } from './api.js';
 
-// ── Stop-motion thumbnail ──────────────────────────────────────────────────────
+// ── Video thumbnail ────────────────────────────────────────────────────────────
 
-const StopMotionThumbnail = ({ fileId, onClick }) => {
-  const [frame, setFrame] = useState(0);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setFrame((prev) => (prev + 1) % 4);
-    }, 200 + Math.random() * 50);
-    return () => clearInterval(interval);
-  }, []);
+const VideoThumbnail = ({ fileId, onClick }) => {
+  const [status, setStatus] = useState('loading'); // loading | ready | error
 
   return (
     <div
       className="absolute inset-0 w-full h-full bg-zinc-900 overflow-hidden group/thumb cursor-pointer"
       onClick={onClick}
     >
-      {[0, 1, 2, 3].map((i) => (
-        <img
-          key={i}
-          src={`https://picsum.photos/seed/${fileId}-f${i}/320/180?blur=1`}
-          alt="thumbnail"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-0 ${
-            frame === i
-              ? 'opacity-70 mix-blend-luminosity group-hover/thumb:mix-blend-normal group-hover/thumb:opacity-100'
-              : 'opacity-0'
-          }`}
-          referrerPolicy="no-referrer"
-        />
-      ))}
+      {status !== 'ready' && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          {status === 'loading'
+            ? <div className="w-5 h-5 rounded-full border-2 border-zinc-700 border-t-zinc-400 animate-spin" />
+            : <FileVideo className="w-6 h-6 text-zinc-700" />}
+        </div>
+      )}
+      <img
+        src={`/api/files/${fileId}/thumbnail`}
+        alt=""
+        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 opacity-70 group-hover/thumb:opacity-100 ${status === 'ready' ? '' : 'opacity-0'}`}
+        onLoad={() => setStatus('ready')}
+        onError={() => setStatus('error')}
+      />
       <div className="absolute inset-0 flex items-center justify-center bg-black/10 group-hover/thumb:bg-black/30 transition-colors">
         <Play
           className="w-8 h-8 text-white/70 drop-shadow-md opacity-0 group-hover/thumb:opacity-100 transition-opacity"
@@ -510,8 +504,8 @@ export default function App() {
                                             : 'border-zinc-800 hover:border-zinc-700'
                                         }`}
                                       >
-                                        <StopMotionThumbnail
-                                          fileId={String(file.id)}
+                                        <VideoThumbnail
+                                          fileId={file.id}
                                           onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}
                                         />
                                         <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-black/20 pointer-events-none" />
@@ -769,7 +763,7 @@ export default function App() {
                 </button>
               </div>
               <div className="flex-1 flex items-center justify-center p-4">
-                <video src={`/api/files/${previewFile.id}/stream`} controls autoPlay playsInline
+                <video src={`/api/files/${previewFile.id}/preview`} controls autoPlay playsInline
                   className="max-w-full max-h-full rounded-lg shadow-2xl border border-zinc-800"
                 />
               </div>

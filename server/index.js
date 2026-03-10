@@ -6,8 +6,9 @@ import { fileURLToPath } from "url";
 import { randomUUID } from "crypto";
 import { createReadStream, statSync, existsSync } from "fs";
 
-import { startScraper } from "./scraper.js";
-import { startLoadsSync } from "./services/loadsSync.js";
+import { startScraper }    from "./scraper.js";
+import { startLoadsSync }  from "./services/loadsSync.js";
+import { generateThumbnail, thumbnailPath, previewPath, queuePreview } from "./services/media.js";
 import {
   getLoadsByDate,
   getLoadById,
@@ -124,6 +125,11 @@ sdEvents.on("inserted", async (device) => {
       jumped_with: JSON.parse(f.jumped_with || "[]"),
     }));
     broadcastSd("files_scanned", { sessionId, count: saved.length, files: saved });
+
+    // Kick off background preview transcoding (non-blocking)
+    for (const f of saved) {
+      if (f.original_path) queuePreview(f.id, f.original_path);
+    }
   } catch (err) {
     console.error(`[server] scan error: ${err.message}`);
     broadcastSd("scan_error", { sessionId, error: err.message });
@@ -277,6 +283,80 @@ app.get("/api/files/:id/stream", (req, res) => {
     res.writeHead(200, { "Content-Length": stat.size, "Content-Type": "video/mp4", "Accept-Ranges": "bytes" });
     createReadStream(filePath).pipe(res);
   }
+});
+
+/** GET /api/files/:id/thumbnail — lazy-generate + serve a JPEG frame */
+app.get("/api/files/:id/thumbnail", async (req, res) => {
+  const [file] = getFilesByIds([Number(req.params.id)]);
+  if (!file) return res.status(404).end();
+
+  const sourcePath = file.original_path;
+  if (!sourcePath || !existsSync(sourcePath)) return res.status(404).end();
+
+  // Serve cached thumbnail if available
+  const cached = thumbnailPath(file.id);
+  if (existsSync(cached)) {
+    return res.sendFile(cached);
+  }
+
+  try {
+    const out = await generateThumbnail(file.id, sourcePath);
+    res.sendFile(out);
+  } catch (err) {
+    console.error(`[media] thumbnail error for file ${file.id}: ${err.message}`);
+    res.status(500).end();
+  }
+});
+
+/** GET /api/files/:id/preview — serve transcoded 360p preview, or raw stream as fallback */
+app.get("/api/files/:id/preview", (req, res) => {
+  const [file] = getFilesByIds([Number(req.params.id)]);
+  if (!file) return res.status(404).end();
+
+  const pv = previewPath(file.id);
+  if (existsSync(pv)) {
+    // Serve the pre-generated preview with range support
+    let stat;
+    try { stat = statSync(pv); } catch { return res.status(404).end(); }
+    const { range } = req.headers;
+    if (range) {
+      const [startStr, endStr] = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(startStr);
+      const end   = endStr ? parseInt(endStr) : stat.size - 1;
+      res.writeHead(206, {
+        "Content-Range":  `bytes ${start}-${end}/${stat.size}`,
+        "Accept-Ranges":  "bytes",
+        "Content-Length": end - start + 1,
+        "Content-Type":   "video/mp4",
+      });
+      return createReadStream(pv, { start, end }).pipe(res);
+    }
+    res.writeHead(200, { "Content-Length": stat.size, "Content-Type": "video/mp4", "Accept-Ranges": "bytes" });
+    return createReadStream(pv).pipe(res);
+  }
+
+  // Preview not ready — fall back to raw file (also queues preview if not already queued)
+  const sourcePath = file.local_path || file.original_path;
+  if (!sourcePath) return res.status(404).end();
+  if (file.original_path) queuePreview(file.id, file.original_path);
+
+  let stat;
+  try { stat = statSync(sourcePath); } catch { return res.status(404).end(); }
+  const { range } = req.headers;
+  if (range) {
+    const [startStr, endStr] = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(startStr);
+    const end   = endStr ? parseInt(endStr) : stat.size - 1;
+    res.writeHead(206, {
+      "Content-Range":  `bytes ${start}-${end}/${stat.size}`,
+      "Accept-Ranges":  "bytes",
+      "Content-Length": end - start + 1,
+      "Content-Type":   "video/mp4",
+    });
+    return createReadStream(sourcePath, { start, end }).pipe(res);
+  }
+  res.writeHead(200, { "Content-Length": stat.size, "Content-Type": "video/mp4", "Accept-Ranges": "bytes" });
+  createReadStream(sourcePath).pipe(res);
 });
 
 // ── Copy ──────────────────────────────────────────────────────────────────────
