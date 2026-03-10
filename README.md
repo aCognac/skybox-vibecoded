@@ -3,31 +3,31 @@ trying out claude on skybox
 
 ## Getting started
 
-### With VS Code
-
-Open the project folder in VS Code, then use one of these methods:
-
-**Run both webapp and server at once:**
-- Press `Ctrl+Shift+B` (or `Cmd+Shift+B` on Mac) — this runs the default build task `Start all (webapp + server)`
-
-**Or run them individually via the Terminal menu → Run Task:**
-- `Start webapp (dev)` — starts the Vite dev server at http://localhost:5173
-- `Start server (dev)` — starts the Express API server
-
-**Debug:**
-- Press `F5` → select `Open webapp in Chrome` to launch the app in a Chrome debug session
-- Select `Debug server` to run the Node server with the debugger attached
-
-### Manually
+### 1. Install dependencies (first time only)
 
 ```bash
-# Install dependencies (first time)
 cd webapp && npm install
 cd ../server && npm install
+```
 
-# Start webapp
-cd webapp && npm run dev
+### 2. Start the app
 
-# Start server (separate terminal)
+You need two terminals running at the same time:
+
+**Terminal 1 — server:**
+```bash
 cd server && npm run dev
 ```
+Server runs at http://localhost:3001
+
+**Terminal 2 — webapp:**
+```bash
+cd webapp && npm run dev
+```
+Open http://localhost:5173 in your browser.
+
+### VS Code shortcut
+
+In VS Code you can also use `Terminal → Run Task...`:
+- `Start server (dev)` — starts the Express API server
+- `Start webapp (dev)` — starts the Vite dev server
